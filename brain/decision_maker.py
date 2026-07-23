@@ -115,4 +115,4 @@ class DecisionManager:
 
     def get_pending_summary(self): return self.pending
     def get_open_trades_summary(self): return self.open
-    def _find(self, tid): return next((t for t in self.pending if t["id"]==tid), None}
+    def _find(self, tid): return next((t for t in self.pending if t["id"]==tid), None
