@@ -1,0 +1,9 @@
+dash
+requests
+urllib3
+pytest
+pytest-mock
+feedparser
+ccxt
+pandas
+numpy
