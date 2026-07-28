@@ -1,44 +1,53 @@
-# CryptoDashboard (fork of BTC AI Brain)
+# BTC AI Brain — human-in-the-loop Bitcoin futures research
 
-This repository contains the BTC AI Brain and dashboard for analyzing Bitcoin market data, computing technical indicators, deriving multi-timeframe signals, collecting macro & news data, making rule-based AI decisions, running backtests, and displaying results in a Dash dashboard.
+A local, **decision-support** dashboard for Bitcoin futures research. It brings together BTC market data, technical and multi-timeframe context, derivatives metrics, macro markets, public RSS news, local persistence, and a reproducible technical backtest.
 
-This update improves reliability, logging, concurrency, retries, DB durability, and adds CI + basic tests.
+> **Important:** This application does not hold exchange credentials, does not include an order-execution client, and cannot place a live order. “Approve” records a **paper trade plan** only. BTC futures are high-risk; no model, indicator, sentiment score, or backtest is a guarantee of a trade outcome.
 
-Quickstart
+## What is included
 
-1. Create a Python virtual environment and activate it:
+- **Market data:** Binance public BTC futures OHLCV, ticker, funding, open interest, order-book imbalance, fear & greed.
+- **Technical context:** EMA 21/50/200, RSI, MACD, ATR, Bollinger Bands, Supertrend, support/resistance, signal table, and 1m–1w multi-timeframe consensus.
+- **Macro watch:** US equities (S&P 500, Nasdaq, Dow), London (FTSE 100), Europe (DAX), Japan (Nikkei), VIX, DXY, EUR/USD, USD/JPY, gold and oil. Each instrument is fetched independently, so a broken feed degrades only that instrument.
+- **News/event watch:** public crypto, Fed, macro, and geopolitical RSS sources. The last successful feed remains visible during outages. Social/influencer data is intentionally not scraped; use a licensed API and add it as a source if required.
+- **Risk-first plans:** explainable rule-based long/short/stand-aside recommendations with entry reference, invalidation, stop, targets, confidence, and explicit human approval queue.
+- **Storage:** SQLite WAL database persists fetched OHLCV candles, snapshots, news, macro data, and plans in `btc_brain.db` (ignored by Git).
+- **Backtesting:** a small no-look-ahead technical trend/pullback backtester including configurable fees and slippage. It evaluates a rule set, not future performance.
 
-   python -m venv venv
-   venv\Scripts\activate  # Windows
+## Setup
 
-2. Install dependencies:
+```bash
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS/Linux
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env  # Windows PowerShell: Copy-Item .env.example .env
+python main.py
+```
 
-   pip install -r requirements.txt
+Open `http://127.0.0.1:8050`.
 
-3. Create a .env file (copy from .env.example) and set environment variables. Example:
+`FRED_API_KEY` is optional. Without it, the dashboard continues operating and marks official Fed observations unavailable. Public market/news providers can rate-limit, move, or fail; the dashboard retains the last successful data and marks degraded data instead of stopping.
 
-   FRED_API_KEY=your_fred_api_key_here
+## Operating workflow
 
-   # Create .env from the example (Windows PowerShell):
-   cp .env.example .env
-   # Edit .env and add your keys. Do NOT commit .env to the repository.
+1. Start with the 1D/4H trend and macro/event context—not a 1m signal.
+2. Review the proposed plan’s **invalidation**, stop distance, target, funding, and news risk.
+3. Set your own position size from a fixed account-risk budget (the default suggested cap is 1%); do not treat the displayed leverage as a recommendation.
+4. Approve only after independently checking price and upcoming economic events. Approval is a local paper-plan record.
+5. Run a backtest only over sufficiently long, representative data. Include fees/slippage and reject strategies that fail out-of-sample testing.
 
-4. Run the app (recommended):
+## Data quality and limitations
 
-   python start.py
+Correlation is conditional: e.g. BTC may trade like a risk asset one period and a safe-haven narrative another. Keyword news sentiment is explainable but cannot validate a story, detect misinformation, or predict policy outcomes. The tool is designed to make uncertainty visible, not to make autonomous trading decisions.
 
-   start.py will load .env (via python-dotenv) and then execute main.py so environment
-   variables are available to your app. If your project uses a different entrypoint,
-   either run it directly or modify start.py accordingly.
+## Development
 
-What's changed in this PR
+```bash
+python -m compileall .
+pytest -q
+```
 
-- Add structured logging configuration.
-- Use a requests Session with retries for external HTTP calls.
-- Reduce blocking by parallelizing independent fetches in the dashboard.
-- Add SQLite WAL mode for better concurrency.
-- Replace ad-hoc prints with logging where components are instantiated.
-- Move hard-coded API keys to environment variables.
-- Add a basic CI workflow (pytest) and a small unit test suite.
-
-License: MIT
+The project runs CI on pull requests. Git version control tracks source and tests; local databases and secrets are excluded through `.gitignore`.

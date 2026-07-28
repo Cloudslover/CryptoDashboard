@@ -18,6 +18,13 @@ class DecisionManager:
         logger.info("[OK] DecisionManager ready")
 
     def submit(self, ai_decision) -> dict:
+        """Queue a *new* actionable plan for human review; never executes an order."""
+        if ai_decision.action in {"STAND_ASIDE", "WEAK_LONG", "WEAK_SHORT"}:
+            return {"status": "NOT_QUEUED", "reason": "No high-conviction actionable setup."}
+        # Do not create a new approval item every refresh for the same market thesis.
+        for queued in self.pending:
+            if queued["action"] == ai_decision.action and abs(queued["entry_price"] - ai_decision.entry_price) / max(ai_decision.entry_price, 1) < .003:
+                return queued
         self._counter += 1
         rec = {
             "id":            self._counter,
