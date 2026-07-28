@@ -37,6 +37,11 @@ class Database:
                 rsi REAL, ema_50 REAL, ema_200 REAL,
                 funding REAL, oi_usd REAL, fear_greed INTEGER,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS candles (
+                timeframe TEXT NOT NULL, timestamp TEXT NOT NULL,
+                open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL,
+                close REAL NOT NULL, volume REAL NOT NULL,
+                PRIMARY KEY (timeframe, timestamp));
             CREATE TABLE IF NOT EXISTS news_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT, title TEXT, summary TEXT,
@@ -76,6 +81,30 @@ class Database:
                 max_drawdown REAL, sharpe_ratio REAL, params TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP);
             """)
+
+    def save_candles(self, timeframe, candles: pd.DataFrame) -> int:
+        """Persist exchange OHLCV idempotently, so restarts retain historical data."""
+        if candles is None or candles.empty:
+            return 0
+        rows = [(timeframe, str(index), float(row.open), float(row.high), float(row.low), float(row.close), float(row.volume))
+                for index, row in candles[["open", "high", "low", "close", "volume"]].iterrows()]
+        try:
+            with self._conn() as conn:
+                conn.executemany("INSERT OR REPLACE INTO candles (timeframe,timestamp,open,high,low,close,volume) VALUES (?,?,?,?,?,?,?)", rows)
+            return len(rows)
+        except Exception as exc:
+            logger.warning("save_candles failed: %s", exc)
+            return 0
+
+    def load_candles(self, timeframe="1h", limit=2000) -> pd.DataFrame:
+        try:
+            with self._conn() as conn:
+                df = pd.read_sql_query("SELECT timestamp,open,high,low,close,volume FROM candles WHERE timeframe=? ORDER BY timestamp DESC LIMIT ?", conn, params=(timeframe, limit))
+            if df.empty: return df
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            return df.set_index("timestamp").sort_index()
+        except Exception as exc:
+            logger.warning("load_candles failed: %s", exc); return pd.DataFrame()
 
     def save_price_snapshot(self, d):
         try:

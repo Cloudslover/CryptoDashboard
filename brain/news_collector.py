@@ -67,13 +67,16 @@ class NewsCollector:
         logger.info("[OK] NewsCollector ready")
 
     def fetch_all_news(self) -> List[NewsItem]:
+        # Preserve the last successful result during a feed cooldown or outage.
+        # A temporary broken publisher must not make the intelligence panel empty.
         all_news = []
         for category, feeds in self.RSS_FEEDS.items():
             for url in feeds:
-                items = self._fetch_rss(url, category)
-                all_news.extend(items)
-        all_news.sort(key=lambda x: x.timestamp, reverse=True)
-        self.cache = all_news[:100]
+                all_news.extend(self._fetch_rss(url, category))
+        if all_news:
+            all_news.sort(key=lambda x: x.timestamp, reverse=True)
+            deduped = {item.url or item.title: item for item in all_news}
+            self.cache = list(deduped.values())[:100]
         return self.cache
 
     def _fetch_rss(self, url, category):

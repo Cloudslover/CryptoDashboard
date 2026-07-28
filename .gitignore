@@ -1,0 +1,8 @@
+.env
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+btc_brain.db
+btc_brain.db-*

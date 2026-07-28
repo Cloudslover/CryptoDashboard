@@ -54,7 +54,8 @@ class BTCDataFetcher:
             df = df.astype(float)
             return self._store(key, df)
         except Exception as e:
-            logger.exception("get_ohlcv %s: %s", timeframe, e)
+            # Provider outages are expected; callers use the cached/local fallback.
+            logger.warning("get_ohlcv %s unavailable: %s", timeframe, e)
             return self.cache.get(key, pd.DataFrame())
 
     def get_current_price(self):
