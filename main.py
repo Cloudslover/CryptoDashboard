@@ -19,7 +19,8 @@ from dashboard.app import BrainService, create_app
 def main():
     configure_logging()
     log = logging.getLogger(__name__)
-    service = BrainService(BTCDataFetcher(), Database(), NewsCollector(), MacroMonitor(), AIBrain(), DecisionManager(), MarketCycleAnalyzer(), SignalEngine(), MTFAnalyzer(), Backtester())
+    database = Database()
+    service = BrainService(BTCDataFetcher(), database, NewsCollector(), MacroMonitor(), AIBrain(), DecisionManager(database), MarketCycleAnalyzer(), SignalEngine(), MTFAnalyzer(), Backtester())
     service.refresh()
     def monitor():
         while True:

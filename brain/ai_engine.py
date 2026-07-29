@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 import logging
 
@@ -15,11 +15,11 @@ class AIDecision:
     action:         str
     confidence:     float
     reasoning:      List[str]
-    entry_price:    float
-    stop_loss:      float
-    take_profit_1:  float
-    take_profit_2:  float
-    take_profit_3:  float
+    entry_price:    Optional[float]
+    stop_loss:      Optional[float]
+    take_profit_1:  Optional[float]
+    take_profit_2:  Optional[float]
+    take_profit_3:  Optional[float]
     position_size:  float
     leverage:       int
     time_horizon:   str
@@ -70,18 +70,28 @@ class AIBrain:
         reasoning.extend(rr)
 
         action, confidence = self._to_action(score)
-        price = market_data.get("price", 0) if isinstance(market_data, dict) else 0
-        sl, tp1, tp2, tp3, rr_ratio = self._levels(action, price, price_history, mtf_data)
-        size, lev = self._position(confidence, cycle_data, signals)
-        horizon   = self._horizon(mtf_data, cycle_data)
-        invalid   = self._invalidation(action, price, price_history)
+        market_price = market_data.get("price", 0) if isinstance(market_data, dict) else 0
+        # STAND_ASIDE is not a synthetic short. It deliberately has no entry,
+        # stop, targets, size, or leverage for a user to mistake for a plan.
+        if action == "STAND_ASIDE":
+            entry_price = None
+            sl = tp1 = tp2 = tp3 = None
+            rr_ratio = 0
+            size, lev = 0, 0
+            horizon = "WAIT FOR A CLEAR SETUP"
+        else:
+            entry_price = market_price
+            sl, tp1, tp2, tp3, rr_ratio = self._levels(action, market_price, price_history, mtf_data)
+            size, lev = self._position(confidence, cycle_data, signals)
+            horizon = self._horizon(mtf_data, cycle_data)
+        invalid = self._invalidation(action, market_price, price_history)
 
         dec = AIDecision(
             timestamp      = datetime.now(),
             action         = action,
             confidence     = confidence,
             reasoning      = reasoning,
-            entry_price    = price,
+            entry_price    = entry_price,
             stop_loss      = sl,
             take_profit_1  = tp1,
             take_profit_2  = tp2,
@@ -97,6 +107,17 @@ class AIBrain:
         return dec
 
     # ── Analyzers ────────────────────────────────────────────────────
+    @staticmethod
+    def _valid_vix(vix):
+        """Return a positive VIX price only when the source says it is usable."""
+        if not isinstance(vix, dict) or vix.get("available") is False:
+            return None
+        try:
+            value = float(vix.get("price"))
+        except (TypeError, ValueError):
+            return None
+        return value if np.isfinite(value) and value > 0 else None
+
     def _macro(self, macro):
         s = 0.0; r = []
         if not macro: return 0, ["Macro: N/A"]
@@ -113,9 +134,13 @@ class AIBrain:
             s-=15; r.append(f"FED WARNING: {fed.get('interpretation','')}")
         stocks = macro.get("stocks",{})
         vix = stocks.get("indices",{}).get("VIX",{})
-        vp  = vix.get("price",20) if isinstance(vix,dict) else 20
-        if vp > 35: s-=20; r.append(f"VIX DANGER: {vp:.0f}")
-        elif vp < 15: s+=10; r.append(f"VIX low ({vp:.0f}) - risk on")
+        vp = self._valid_vix(vix)
+        if vp is None:
+            r.append("VIX: unavailable (excluded from score)")
+        elif vp > 35:
+            s -= 20; r.append(f"VIX DANGER: {vp:.0f}")
+        elif vp < 15:
+            s += 10; r.append(f"VIX low ({vp:.0f}) - risk on")
         return s, r
 
     def _news(self, news):
@@ -203,9 +228,10 @@ class AIBrain:
             if rd>=5: score=min(score,-10); r.append(f"RISK: {rd} red signals active")
         if isinstance(macro,dict):
             stocks = macro.get("stocks",{})
-            vix    = stocks.get("indices",{}).get("VIX",{})
-            vp     = vix.get("price",20) if isinstance(vix,dict) else 20
-            if vp>40: score-=20; r.append(f"RISK: VIX={vp:.0f} - Market panic!")
+            vix = stocks.get("indices", {}).get("VIX", {})
+            vp = self._valid_vix(vix)
+            if vp is not None and vp > 40:
+                score -= 20; r.append(f"RISK: VIX={vp:.0f} - Market panic!")
         return score, r
 
     def _to_action(self, score):
@@ -219,6 +245,8 @@ class AIBrain:
         else:           return "STRONG_SHORT",  min(95, 60-score*0.35)
 
     def _levels(self, action, price, df, mtf):
+        if action == "STAND_ASIDE":
+            return None, None, None, None, 0
         atr = float(df["atr"].iloc[-1]) if (df is not None and not df.empty and "atr" in df.columns) else price*0.01
         long = "LONG" in action
         if long:

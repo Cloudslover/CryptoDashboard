@@ -14,8 +14,8 @@ DB_PATH = os.path.join(
 
 class Database:
 
-    def __init__(self):
-        self.path = os.path.abspath(DB_PATH)
+    def __init__(self, path=None):
+        self.path = os.path.abspath(path or DB_PATH)
         self._init()
         logger.info(f"[OK] Database: {self.path}")
 
@@ -59,6 +59,33 @@ class Database:
                 exit_price REAL DEFAULT 0, pnl_pct REAL DEFAULT 0,
                 notes TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS paper_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                action TEXT NOT NULL,
+                confidence REAL,
+                entry_price REAL,
+                stop_loss REAL,
+                take_profit_1 REAL,
+                take_profit_2 REAL,
+                take_profit_3 REAL,
+                position_size REAL,
+                leverage INTEGER,
+                time_horizon TEXT,
+                risk_reward REAL,
+                reasoning TEXT,
+                invalidation TEXT,
+                status TEXT NOT NULL DEFAULT 'PENDING_APPROVAL',
+                approved_at TEXT,
+                closed_at TEXT,
+                exit_price REAL,
+                pnl_pct REAL,
+                notes TEXT DEFAULT '',
+                reject_reason TEXT DEFAULT '',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE INDEX IF NOT EXISTS idx_paper_trades_status
+                ON paper_trades(status);
             CREATE TABLE IF NOT EXISTS macro_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT,
@@ -170,6 +197,71 @@ class Database:
                     (status, exit_price, pnl, notes, did))
         except Exception as e:
             logger.exception("update_decision failed: %s", e)
+
+    def create_paper_trade(self, trade: dict) -> int:
+        """Insert a paper plan and return its durable SQLite id."""
+        columns = (
+            "timestamp", "action", "confidence", "entry_price", "stop_loss",
+            "take_profit_1", "take_profit_2", "take_profit_3", "position_size",
+            "leverage", "time_horizon", "risk_reward", "reasoning",
+            "invalidation", "status", "approved_at", "closed_at", "exit_price",
+            "pnl_pct", "notes", "reject_reason",
+        )
+        values = [trade.get(column) for column in columns]
+        values[columns.index("reasoning")] = json.dumps(trade.get("reasoning", []))
+        try:
+            with self._conn() as conn:
+                placeholders = ",".join("?" for _ in columns)
+                cursor = conn.execute(
+                    f"INSERT INTO paper_trades ({','.join(columns)}) VALUES ({placeholders})",
+                    values,
+                )
+                return int(cursor.lastrowid)
+        except Exception as exc:
+            logger.exception("create_paper_trade failed: %s", exc)
+            return 0
+
+    def update_paper_trade(self, trade: dict) -> bool:
+        """Persist approval, rejection, or manual-close state for a paper plan."""
+        columns = (
+            "action", "confidence", "entry_price", "stop_loss", "take_profit_1",
+            "take_profit_2", "take_profit_3", "position_size", "leverage",
+            "time_horizon", "risk_reward", "reasoning", "invalidation", "status",
+            "approved_at", "closed_at", "exit_price", "pnl_pct", "notes",
+            "reject_reason",
+        )
+        values = [trade.get(column) for column in columns]
+        values[columns.index("reasoning")] = json.dumps(trade.get("reasoning", []))
+        try:
+            with self._conn() as conn:
+                assignments = ",".join(f"{column}=?" for column in columns)
+                cursor = conn.execute(
+                    f"UPDATE paper_trades SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                    values + [trade.get("id")],
+                )
+                return cursor.rowcount == 1
+        except Exception as exc:
+            logger.exception("update_paper_trade failed: %s", exc)
+            return False
+
+    def load_paper_trades(self) -> list:
+        """Load all durable paper plans in id order for DecisionManager restore."""
+        try:
+            with self._conn() as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT * FROM paper_trades ORDER BY id ASC").fetchall()
+            records = []
+            for row in rows:
+                record = dict(row)
+                try:
+                    record["reasoning"] = json.loads(record.get("reasoning") or "[]")
+                except (TypeError, json.JSONDecodeError):
+                    record["reasoning"] = [str(record.get("reasoning") or "")]
+                records.append(record)
+            return records
+        except Exception as exc:
+            logger.exception("load_paper_trades failed: %s", exc)
+            return []
 
     def save_macro(self, macro):
         try:
