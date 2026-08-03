@@ -59,6 +59,13 @@ class Database:
                 exit_price REAL DEFAULT 0, pnl_pct REAL DEFAULT 0,
                 notes TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS polymarket_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT, slug TEXT, question TEXT, category TEXT,
+                yes_price REAL, volume REAL, liquidity REAL, end_date TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE INDEX IF NOT EXISTS idx_polymarket_slug_ts
+                ON polymarket_log (slug, timestamp);
             CREATE TABLE IF NOT EXISTS macro_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT,
@@ -170,6 +177,36 @@ class Database:
                     (status, exit_price, pnl, notes, did))
         except Exception as e:
             logger.exception("update_decision failed: %s", e)
+
+    def save_polymarket(self, markets):
+        """Persist a Polymarket snapshot so probability shifts can be computed
+        later (e.g. 'how did implied probability move since ~24h ago')."""
+        if not markets:
+            return
+        ts = datetime.now().isoformat()
+        try:
+            with self._conn() as c:
+                c.executemany(
+                    """INSERT INTO polymarket_log
+                       (timestamp,slug,question,category,yes_price,volume,liquidity,end_date)
+                       VALUES(?,?,?,?,?,?,?,?)""",
+                    [(ts, m.slug, (m.question or "")[:300], m.category,
+                      m.yes_price, m.volume, m.liquidity, m.end_date)
+                     for m in markets])
+        except Exception as exc:
+            logger.warning("save_polymarket failed: %s", exc)
+
+    def load_polymarket_history(self):
+        """Return all stored Polymarket snapshots ordered by time."""
+        try:
+            with self._conn() as c:
+                return pd.read_sql_query(
+                    """SELECT timestamp,slug,question,category,yes_price,volume,
+                              liquidity,end_date
+                       FROM polymarket_log ORDER BY timestamp ASC""", c)
+        except Exception as exc:
+            logger.warning("load_polymarket_history failed: %s", exc)
+            return pd.DataFrame()
 
     def save_macro(self, macro):
         try:

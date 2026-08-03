@@ -13,6 +13,13 @@ DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8050"))
 REFRESH_SECONDS = int(os.getenv("REFRESH_SECONDS", "60"))
 NEWS_REFRESH_SECONDS = int(os.getenv("NEWS_REFRESH_SECONDS", "300"))
 MACRO_REFRESH_SECONDS = int(os.getenv("MACRO_REFRESH_SECONDS", "300"))
+# Prediction-market (Polymarket) sentiment / macro-intelligence polling.
+POLYMARKET_REFRESH_SECONDS = int(os.getenv("POLYMARKET_REFRESH_SECONDS", "900"))
+# Horizon (hours) used to compute an implied-probability "shift since ~1 day ago".
+POLYMARKET_SHIFT_HOURS = float(os.getenv("POLYMARKET_SHIFT_HOURS", "24.0"))
+# Optional comma-separated list of specific Polymarket slugs to always include,
+# in addition to keyword discovery. Leave empty to rely on keyword search.
+POLYMARKET_SLUGS = os.getenv("POLYMARKET_SLUGS", "")
 MAX_RISK_PERCENT = float(os.getenv("MAX_RISK_PERCENT", "1.0"))
 MIN_RISK_REWARD = float(os.getenv("MIN_RISK_REWARD", "1.5"))
 

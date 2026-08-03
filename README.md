@@ -11,6 +11,7 @@ A local, **decision-support** dashboard for Bitcoin futures research. It brings 
 - **Technical context:** EMA 21/50/200, RSI, MACD, ATR, Bollinger Bands, Supertrend, support/resistance, signal table, and 1m–1w multi-timeframe consensus.
 - **Macro watch:** US equities (S&P 500, Nasdaq, Dow), London (FTSE 100), Europe (DAX), Japan (Nikkei), VIX, DXY, EUR/USD, USD/JPY, gold and oil. Each instrument is fetched independently, so a broken feed degrades only that instrument.
 - **News/event watch:** public crypto, Fed, macro, and geopolitical RSS sources. The last successful feed remains visible during outages. Social/influencer data is intentionally not scraped; use a licensed API and add it as a source if required.
+- **Prediction markets (Polymarket):** real-money implied-probability sentiment for crypto and macro events (Fed cuts, CPI, recession odds, Bitcoin price targets, ETF/reserve milestones) via the public Gamma API. The dashboard tracks how each market's "P(Yes)" moves over time (e.g. "shift since ~1 day ago"), flags the biggest probability shifts, and correlates them with BTC price direction. Like every other source it degrades gracefully during outages and retains the last snapshot.
 - **Risk-first plans:** explainable rule-based long/short/stand-aside recommendations with entry reference, invalidation, stop, targets, confidence, and explicit human approval queue.
 - **Storage:** SQLite WAL database persists fetched OHLCV candles, snapshots, news, macro data, and plans in `btc_brain.db` (ignored by Git).
 - **Backtesting:** a small no-look-ahead technical trend/pullback backtester including configurable fees and slippage. It evaluates a rule set, not future performance.
@@ -31,6 +32,23 @@ python main.py
 Open `http://127.0.0.1:8050`.
 
 `FRED_API_KEY` is optional. Without it, the dashboard continues operating and marks official Fed observations unavailable. Public market/news providers can rate-limit, move, or fail; the dashboard retains the last successful data and marks degraded data instead of stopping.
+
+## Prediction-market (Polymarket) layer
+
+Polymarket prices are **implied probabilities from capital at risk** — a consensus view of what informed participants expect. This app uses them as a sentiment / macro-intelligence dashboard, **not** a buy/sell signal:
+
+- **Track shifts, not levels:** each market records its "P(Yes)" to the local SQLite DB. The dashboard shows the change since a configurable horizon (default ~24 h), so you see repricing *momentum* rather than just a number.
+- **Biggest shifts:** the markets with the largest absolute probability moves are surfaced so you can investigate *why* the crowd repriced.
+- **BTC correlation:** the aggregate crypto-probability move is compared with BTC's 24 h change and labelled "aligned" or "conflict" (e.g. probabilities moved faster than price).
+- **Into the AI:** prediction-market bias contributes a small, explainable factor to the recommendation reasoning (e.g. "PREDICTION MKTS: BULLISH bias (crypto +8.0pt)").
+
+Configuration (`.env`):
+
+- `POLYMARKET_REFRESH_SECONDS` — polling interval (default `900`).
+- `POLYMARKET_SHIFT_HOURS` — horizon for computing probability shifts (default `24`).
+- `POLYMARKET_SLUGS` — optional comma-separated specific market slugs to always include, on top of automatic keyword discovery.
+
+> Note: Polymarket is a *context* layer. Combine it with technicals, macro, and on-chain metrics; never trade on a probability move alone.
 
 ## Operating workflow
 
