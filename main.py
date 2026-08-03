@@ -14,12 +14,13 @@ from analysis.market_cycle import MarketCycleAnalyzer
 from analysis.signals import SignalEngine
 from analysis.mtf_analysis import MTFAnalyzer
 from dashboard.app import BrainService, create_app
+from data.market_intelligence import MarketIntelligence
 
 
 def main():
     configure_logging()
     log = logging.getLogger(__name__)
-    service = BrainService(BTCDataFetcher(), Database(), NewsCollector(), MacroMonitor(), AIBrain(), DecisionManager(), MarketCycleAnalyzer(), SignalEngine(), MTFAnalyzer(), Backtester())
+    service = BrainService(BTCDataFetcher(), Database(), NewsCollector(), MacroMonitor(), AIBrain(), DecisionManager(), MarketCycleAnalyzer(), SignalEngine(), MTFAnalyzer(), Backtester(), MarketIntelligence())
     service.refresh()
     def monitor():
         while True:
