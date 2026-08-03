@@ -78,8 +78,14 @@ def main():
     service.decisions.portfolio_guardian = portfolio
     service.decisions.brain_memory = brain_memory
 
-    service.refresh()
-    service.refresh_llm(force=True)  # first AI Brain brief right after first snapshot
+    def _warm_first_snapshot():
+        service.refresh()
+        service.refresh_llm(force=True)  # first AI Brain brief right after first snapshot
+
+    # Don't gate startup on ~25 network round trips: open the server first and
+    # stream the first snapshot in behind the scenes — the UI shows its
+    # BOOTING/Analyzing placeholders until the first refresh lands.
+    threading.Thread(target=_warm_first_snapshot, daemon=True, name="first-refresh").start()
 
     def monitor():
         while True:

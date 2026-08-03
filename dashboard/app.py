@@ -642,7 +642,11 @@ def create_app(service: BrainService) -> Dash:
         Input("refresh", "n_clicks"),
     )
     def render(_, tf, __):
-        service.refresh()
+        # Never block the browser on the data pipeline: kick a background
+        # refresh (the monitor loop also refreshes on REFRESH_SECONDS and the
+        # refresh_lock collapses overlaps) and render the latest cached
+        # snapshot immediately.
+        threading.Thread(target=service.refresh, daemon=True, name="ui-refresh-kick").start()
         d = service.snapshot()
         t = d.get("ticker", {})
         cycle = d.get("cycle", {})
