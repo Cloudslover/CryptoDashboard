@@ -25,6 +25,7 @@ from brain.ai_engine import AIBrain
 from brain.decision_maker import DecisionManager
 from brain.memory import BrainMemory
 from brain.portfolio import PortfolioGuardian
+from config import LLM_PROVIDER, LLM_REFRESH_SECONDS
 from analysis.market_cycle import MarketCycleAnalyzer
 from analysis.signals import SignalEngine
 from analysis.mtf_analysis import MTFAnalyzer
@@ -77,19 +78,29 @@ def main():
     service.decisions.portfolio_guardian = portfolio
     service.decisions.brain_memory = brain_memory
 
-    service.refresh()
+    def _warm_first_snapshot():
+        service.refresh()
+        service.refresh_llm(force=True)  # first AI Brain brief right after first snapshot
+
+    # Don't gate startup on ~25 network round trips: open the server first and
+    # stream the first snapshot in behind the scenes — the UI shows its
+    # BOOTING/Analyzing placeholders until the first refresh lands.
+    threading.Thread(target=_warm_first_snapshot, daemon=True, name="first-refresh").start()
 
     def monitor():
         while True:
             time.sleep(REFRESH_SECONDS)
             service.refresh()
+            # No-ops until LLM_REFRESH_SECONDS elapse; runs on its own thread.
+            service.refresh_llm()
 
     threading.Thread(target=monitor, daemon=True, name="market-monitor").start()
     app = create_app(service)
     log.warning(
         "BTC.AI BRAIN SECURE TERMINAL — http://127.0.0.1:%s | "
         "BrainMemory cooldown=%sm flip=%.1f%% conf=%.0f%% | "
-        "Portfolio max_risk=%.1f%% total=%.1f%% max_open=%s daily_stop=-%.1f%% | NO ORDERS",
+        "Portfolio max_risk=%.1f%% total=%.1f%% max_open=%s daily_stop=-%.1f%% | "
+        "LLM assistant provider=%s every=%ss | NO ORDERS",
         DASHBOARD_PORT,
         SIGNAL_COOLDOWN_MINUTES,
         FLIP_PRICE_THRESHOLD_PCT,
@@ -98,6 +109,8 @@ def main():
         MAX_TOTAL_RISK_PERCENT,
         MAX_OPEN_TRADES,
         DAILY_LOSS_LIMIT_PCT,
+        LLM_PROVIDER,
+        LLM_REFRESH_SECONDS,
     )
     app.run(host="0.0.0.0", port=DASHBOARD_PORT, debug=False)
 

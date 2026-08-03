@@ -34,6 +34,7 @@ from data.market_intelligence import MarketIntelligence
 from brain.trade_quality import TradeQualityScorer
 from brain.memory import BrainMemory
 from brain.portfolio import PortfolioGuardian
+from brain.llm_brain import LLMBrain
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +261,9 @@ class BrainService:
             self.decisions.brain_memory = self.brain_memory
             self.decisions.db = self.db
 
+        # ── LLM "AI Brain" assistant (Groq → Gemini fallback, non-blocking) ──
+        self.llm = LLMBrain()
+
         self.lock, self.refresh_lock, self.cache = threading.Lock(), threading.Lock(), {"status": "BOOTING SECURE TERMINAL..."}
         self._news_at = self._macro_at = 0
 
@@ -392,6 +396,16 @@ class BrainService:
         with self.lock:
             return self.cache.copy()
 
+    def refresh_llm(self, force: bool = False) -> bool:
+        """Kick the LLM brief generator with the latest snapshot (non-blocking)."""
+        try:
+            snap = self.snapshot()
+            if snap.get("status") == "LIVE":
+                return self.llm.refresh(snap, force=force)
+        except Exception as exc:
+            logger.warning("refresh_llm failed: %s", exc)
+        return False
+
 
 def _card(children, flex="1", border_color=None, extra_style=None):
     style = {
@@ -476,6 +490,18 @@ def create_app(service: BrainService) -> Dash:
                     html.Div(id="stability", style={"flex": "1"}),
                 ],
                 style={"display": "flex", "gap": "12px", "flexWrap": "wrap"},
+            ),
+            # AI Brain — LLM market-intelligence brief (reads every panel)
+            html.Div(
+                [
+                    html.Div("▚ AI BRAIN — MARKET INTELLIGENCE [LLM BRIEF]", className="cyber-header"),
+                    html.Div(
+                        "LLM reads all panels → plain-English situation report. Educational analysis only — never trade commands.",
+                        style={"color": C["muted"], "fontSize": "10px", "letterSpacing": "1px"},
+                    ),
+                    html.Div(id="llm", style={"marginTop": "8px"}),
+                ],
+                className="cyber-card",
             ),
             # Portfolio Guardian + Trade Quality + Macro
             html.Div(
@@ -591,31 +617,17 @@ def create_app(service: BrainService) -> Dash:
         },
     )
 
-    @app.callback(
-        Output("status", "children"),
-        Output("overview", "children"),
-        Output("macro", "children"),
-        Output("decision", "children"),
-        Output("derivatives", "children"),
-        Output("onchain", "children"),
-        Output("health", "children"),
-        Output("research", "children"),
-        Output("chart", "figure"),
-        Output("signals", "children"),
-        Output("news", "children"),
-        Output("queue", "children"),
-        Output("polymarket", "children"),
-        Output("cvd", "children"),
-        Output("tradequality", "children"),
-        Output("stability", "children"),
-        Output("portfolio", "children"),
-        Output("brainmemory", "children"),
-        Input("poll", "n_intervals"),
-        Input("timeframe", "value"),
-        Input("refresh", "n_clicks"),
-    )
-    def render(_, tf, __):
-        service.refresh()
+    def _render(_, tf, __):
+        """Build all panel children from the latest cached snapshot.
+
+        Wrapped by the `render` callback below, which adds a DEGRADED fallback
+        so one malformed data point can never 500 the whole terminal.
+        """
+        # Never block the browser on the data pipeline: kick a background
+        # refresh (the monitor loop also refreshes on REFRESH_SECONDS and the
+        # refresh_lock collapses overlaps) and render the latest cached
+        # snapshot immediately.
+        threading.Thread(target=service.refresh, daemon=True, name="ui-refresh-kick").start()
         d = service.snapshot()
         t = d.get("ticker", {})
         cycle = d.get("cycle", {})
@@ -842,6 +854,10 @@ def create_app(service: BrainService) -> Dash:
                 ], className=f"mempool-block {cls}", title=f"{b.get('nTx')} tx, median {median} sat/vB, {b.get('blockVSize')} MB")
             )
 
+        # difficultyChange may be missing (string em-dash) — never crash the render
+        _dc = diff_adj.get("difficultyChange")
+        _dc_txt = f"{_dc:+.2f}%" if isinstance(_dc, (int, float)) else "—"
+
         onchain_ui = html.Div([
             html.Div("▚ ON-CHAIN & MEMPOOL EXPLORER [mempool.space]", className="cyber-header", style={"fontSize": "11px"}),
             html.Div([
@@ -853,7 +869,7 @@ def create_app(service: BrainService) -> Dash:
             html.Div(block_visual, style={"marginTop": "8px", "display": "flex", "flexWrap": "wrap"}),
             html.Div([
                 html.Div(f"FAST {fees_rec.get('fastestFee','—')} | 30M {fees_rec.get('halfHourFee','—')} | 1H {fees_rec.get('hourFee','—')} | MIN {fees_rec.get('minimumFee','—')} sat/vB", style={"fontSize": "10px", "color": C["muted"], "marginTop": "6px"}),
-                html.Div(f"DIFF ADJ {diff_adj.get('progressPercent','—')}% | Δ {diff_adj.get('difficultyChange','—'):+}% | {diff_adj.get('remainingBlocks','—')} blocks to retarget", style={"fontSize": "10px", "color": C["cyan"], "marginTop": "2px"}),
+                html.Div(f"DIFF ADJ {diff_adj.get('progressPercent','—')}% | Δ {_dc_txt} | {diff_adj.get('remainingBlocks','—')} blocks to retarget", style={"fontSize": "10px", "color": C["cyan"], "marginTop": "2px"}),
             ]),
             html.Div([
                 html.Div(f"Large pending ≥100 BTC: {len(large_tx)}", style={"fontSize": "11px", "color": C["amber"], "marginTop": "6px"}),
@@ -997,7 +1013,96 @@ def create_app(service: BrainService) -> Dash:
         else:
             brainmemory_ui = html.Div("Brain memory initializing... will log every signal with leverage/margin/RR for finetuning", style={"color": C["muted"], "fontSize": "11px"})
 
-        return status_txt, overview, macro_ui, decision, derivatives_ui, onchain_ui, health_ui, research_ui, fig, sigui, news_ui, queue_ui, polymarket_ui, cvd_ui, tq_ui, stability_ui, portfolio_ui, brainmemory_ui
+        # AI Brain — LLM market-intelligence brief
+        brief = service.llm.current()
+        lb_status = brief.get("status", "OFFLINE")
+        if lb_status == "ONLINE":
+            lb_color, lb_icon = C["cyan"], "◉"
+        elif lb_status == "STALE":
+            lb_color, lb_icon = C["amber"], "◉"
+        elif lb_status in ("IDLE", "GENERATING"):
+            lb_color, lb_icon = C["green"], "▌"
+        else:
+            lb_color, lb_icon = C["amber"], "○"
+        lb_head = [
+            html.Span(f"{lb_icon} {lb_status}", style={"color": lb_color, "fontWeight": "800", "fontSize": "12px"}),
+        ]
+        if brief.get("provider"):
+            lb_head.append(html.Span(f" provider: {brief['provider']} / {brief.get('model','?')}", style={"color": C["muted"], "fontSize": "10px", "marginLeft": "8px"}))
+        if brief.get("at"):
+            lb_head.append(html.Span(f" • updated {brief['at']}", style={"color": C["muted"], "fontSize": "10px", "marginLeft": "4px"}))
+        if brief.get("generating"):
+            lb_head.append(html.Span(" ↻ UPDATING…", className="blink", style={"color": C["cyan"], "fontSize": "11px", "marginLeft": "8px"}))
+        llm_ui = html.Div([
+            html.Div(lb_head, style={"marginBottom": "6px"}),
+            html.Div(
+                brief.get("text", ""),
+                style={
+                    "whiteSpace": "pre-wrap", "fontSize": "12px", "lineHeight": "1.65",
+                    "color": C["text_bright"] if lb_status in ("ONLINE", "STALE") else C["muted"],
+                    "background": f"{lb_color}0d", "borderLeft": f"3px solid {lb_color}",
+                    "padding": "10px 12px", "borderRadius": "3px",
+                },
+            ),
+            html.Div(
+                "LLM_PROVIDER=auto → Groq first, Gemini fallback • keys via .env (free) • LLM reads data, never places orders",
+                style={"color": C["muted"], "fontSize": "9px", "marginTop": "6px", "letterSpacing": "0.5px"},
+            ),
+        ])
+
+        return status_txt, overview, macro_ui, decision, derivatives_ui, onchain_ui, health_ui, research_ui, fig, sigui, news_ui, queue_ui, polymarket_ui, cvd_ui, tq_ui, stability_ui, portfolio_ui, brainmemory_ui, llm_ui
+
+    @app.callback(
+        Output("status", "children"),
+        Output("overview", "children"),
+        Output("macro", "children"),
+        Output("decision", "children"),
+        Output("derivatives", "children"),
+        Output("onchain", "children"),
+        Output("health", "children"),
+        Output("research", "children"),
+        Output("chart", "figure"),
+        Output("signals", "children"),
+        Output("news", "children"),
+        Output("queue", "children"),
+        Output("polymarket", "children"),
+        Output("cvd", "children"),
+        Output("tradequality", "children"),
+        Output("stability", "children"),
+        Output("portfolio", "children"),
+        Output("brainmemory", "children"),
+        Output("llm", "children"),
+        Input("poll", "n_intervals"),
+        Input("timeframe", "value"),
+        Input("refresh", "n_clicks"),
+    )
+    def render(_, tf, __):
+        # One malformed data point must never take the whole terminal down:
+        # render the panels with a DEGRADED status instead of 500ing the page.
+        try:
+            return _render(_, tf, __)
+        except Exception as exc:
+            logger.exception("render failed")
+            err = str(exc)
+            msg = html.Div(
+                f"⚠ PANEL UNAVAILABLE: {err}",
+                style={"color": C["red"], "fontSize": "11px", "whiteSpace": "pre-wrap"},
+            )
+            fig = go.Figure()
+            fig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor=C["card"], plot_bgcolor=C["card"],
+                height=520, margin={"l": 20, "r": 10, "t": 10, "b": 20},
+                font={"family": "JetBrains Mono", "color": C["text"], "size": 10},
+            )
+            return (
+                f"DEGRADED: {err}",   # status
+                msg, msg, msg, msg,   # overview, macro, decision, derivatives
+                msg, msg, msg, fig,   # onchain, health, research, chart
+                msg, msg, msg, msg,   # signals, news, queue, polymarket
+                msg, msg, msg, msg,   # cvd, tradequality, stability, portfolio
+                msg, msg,             # brainmemory, llm
+            )
 
     @app.callback(Output("action", "children"), Input("approve", "n_clicks"), Input("reject", "n_clicks"), prevent_initial_call=True)
     def action_cb(yes, no):

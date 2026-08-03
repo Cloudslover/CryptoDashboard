@@ -186,16 +186,23 @@ class BTCDataFetcher:
 
             df = pd.DataFrame(raw)
 
-            # Auto-detect column names
+            # Auto-detect column names. Binance's takerlongshortRatio endpoint
+            # currently returns: buySellRatio, sellVol, buyVol, timestamp
+            # (older/alt mirrors may use longShortRatio / longAccount / shortAccount).
             ratio_col = long_col = short_col = None
+            long_is_vol = short_is_vol = False
             for col in df.columns:
                 cl = col.lower().replace("_","").replace("-","")
-                if cl == "longshortratio":
+                if cl in ("longshortratio", "buysellratio"):
                     ratio_col = col
                 elif cl in ("longaccount","buyratio","longratio"):
                     long_col  = col
                 elif cl in ("shortaccount","sellratio","shortratio"):
                     short_col = col
+                elif cl == "buyvol":
+                    long_col, long_is_vol = col, True
+                elif cl == "sellvol":
+                    short_col, short_is_vol = col, True
 
             if ratio_col is None:
                 # Try computing from long/short
@@ -213,8 +220,15 @@ class BTCDataFetcher:
             avg   = float(df[ratio_col].mean())
 
             if long_col and short_col:
-                lp = float(df[long_col].astype(float).iloc[-1]) * 100
-                sp = float(df[short_col].astype(float).iloc[-1])* 100
+                lv = float(df[long_col].astype(float).iloc[-1])
+                sv = float(df[short_col].astype(float).iloc[-1])
+                if long_is_vol or short_is_vol:
+                    # Volume columns: share of volume, not an account ratio.
+                    lp = lv / (lv + sv) * 100 if (lv + sv) > 0 else 50.0
+                    sp = 100 - lp
+                else:
+                    lp = lv * 100
+                    sp = sv * 100
             else:
                 lp = ratio / (1 + ratio) * 100
                 sp = 100 - lp
@@ -302,6 +316,8 @@ class BTCDataFetcher:
             df = pd.DataFrame(d)
             if df.empty:
                 return pd.DataFrame(columns=["time","price","qty","is_buyer_maker"])
+            # Binance aggTrades uses lowercase keys (p, q, T, m, a, f, l).
+            df = df.rename(columns={"p": "price", "q": "qty"})
             df = df.astype({"price": float, "qty": float})
             # is_buyer_maker is a bool string ("true"/"false") from Binance.
             df["is_buyer_maker"] = df["m"].astype(str).str.lower() == "true"
