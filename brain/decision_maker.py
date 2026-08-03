@@ -42,6 +42,7 @@ class DecisionManager:
             "risk_reward":   ai_decision.risk_reward,
             "reasoning":     ai_decision.reasoning,
             "invalidation":  ai_decision.invalidation,
+            "trade_quality": getattr(ai_decision, "trade_quality", None),
             "status":        "PENDING_APPROVAL",
         }
         self.pending.append(rec)

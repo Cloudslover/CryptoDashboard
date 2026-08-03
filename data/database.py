@@ -55,10 +55,18 @@ class Database:
                 take_profit_1 REAL, take_profit_2 REAL, take_profit_3 REAL,
                 position_size REAL, leverage INTEGER,
                 reasoning TEXT, invalidation TEXT,
+                trade_quality TEXT,
                 status TEXT DEFAULT "PENDING",
                 exit_price REAL DEFAULT 0, pnl_pct REAL DEFAULT 0,
                 notes TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS polymarket_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT, slug TEXT, question TEXT, category TEXT,
+                yes_price REAL, volume REAL, liquidity REAL, end_date TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE INDEX IF NOT EXISTS idx_polymarket_slug_ts
+                ON polymarket_log (slug, timestamp);
             CREATE TABLE IF NOT EXISTS macro_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT,
@@ -81,6 +89,11 @@ class Database:
                 max_drawdown REAL, sharpe_ratio REAL, params TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP);
             """)
+            # Migration for DBs created before the trade_quality column existed.
+            try:
+                c.execute("ALTER TABLE ai_decisions ADD COLUMN trade_quality TEXT")
+            except Exception:
+                pass  # column already exists
 
     def save_candles(self, timeframe, candles: pd.DataFrame) -> int:
         """Persist exchange OHLCV idempotently, so restarts retain historical data."""
@@ -145,18 +158,21 @@ class Database:
     def save_decision(self, d) -> int:
         try:
             with self._conn() as c:
+                tq = d.get("trade_quality")
                 cur = c.execute("""INSERT INTO ai_decisions
                     (timestamp,action,confidence,entry_price,stop_loss,
                      take_profit_1,take_profit_2,take_profit_3,
-                     position_size,leverage,reasoning,invalidation,status)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                     position_size,leverage,reasoning,invalidation,trade_quality,status)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (d.get("timestamp"), d.get("action"),
                      d.get("confidence"), d.get("entry_price"),
                      d.get("stop_loss"),  d.get("take_profit_1"),
                      d.get("take_profit_2"), d.get("take_profit_3"),
                      d.get("position_size"), d.get("leverage"),
                      json.dumps(d.get("reasoning",[])),
-                     d.get("invalidation",""), d.get("status","PENDING")))
+                     d.get("invalidation",""),
+                     json.dumps(tq) if tq else None,
+                     d.get("status","PENDING")))
                 return cur.lastrowid
         except Exception as e:
             logger.exception("save_decision failed: %s", e)
@@ -170,6 +186,36 @@ class Database:
                     (status, exit_price, pnl, notes, did))
         except Exception as e:
             logger.exception("update_decision failed: %s", e)
+
+    def save_polymarket(self, markets):
+        """Persist a Polymarket snapshot so probability shifts can be computed
+        later (e.g. 'how did implied probability move since ~24h ago')."""
+        if not markets:
+            return
+        ts = datetime.now().isoformat()
+        try:
+            with self._conn() as c:
+                c.executemany(
+                    """INSERT INTO polymarket_log
+                       (timestamp,slug,question,category,yes_price,volume,liquidity,end_date)
+                       VALUES(?,?,?,?,?,?,?,?)""",
+                    [(ts, m.slug, (m.question or "")[:300], m.category,
+                      m.yes_price, m.volume, m.liquidity, m.end_date)
+                     for m in markets])
+        except Exception as exc:
+            logger.warning("save_polymarket failed: %s", exc)
+
+    def load_polymarket_history(self):
+        """Return all stored Polymarket snapshots ordered by time."""
+        try:
+            with self._conn() as c:
+                return pd.read_sql_query(
+                    """SELECT timestamp,slug,question,category,yes_price,volume,
+                              liquidity,end_date
+                       FROM polymarket_log ORDER BY timestamp ASC""", c)
+        except Exception as exc:
+            logger.warning("load_polymarket_history failed: %s", exc)
+            return pd.DataFrame()
 
     def save_macro(self, macro):
         try:

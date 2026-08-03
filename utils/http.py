@@ -19,9 +19,14 @@ def _create_session():
 session = _create_session()
 
 
-def get_json(url, params=None, timeout=10):
+def get_json(url, params=None, timeout=10, headers=None):
+    """GET a URL and return parsed JSON.
+
+    `headers` is optional and lets callers send a custom User-Agent or other
+    headers (some public APIs fingerprint default clients).
+    """
     try:
-        r = session.get(url, params=params, timeout=timeout)
+        r = session.get(url, params=params, timeout=timeout, headers=headers)
         r.raise_for_status()
         return r.json()
     except Exception:

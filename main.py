@@ -8,6 +8,7 @@ from data.database import Database
 from data.backtester import Backtester
 from brain.news_collector import NewsCollector
 from brain.macro_monitor import MacroMonitor
+from brain.polymarket import PolymarketMonitor
 from brain.ai_engine import AIBrain
 from brain.decision_maker import DecisionManager
 from analysis.market_cycle import MarketCycleAnalyzer
@@ -20,7 +21,7 @@ from data.market_intelligence import MarketIntelligence
 def main():
     configure_logging()
     log = logging.getLogger(__name__)
-    service = BrainService(BTCDataFetcher(), Database(), NewsCollector(), MacroMonitor(), AIBrain(), DecisionManager(), MarketCycleAnalyzer(), SignalEngine(), MTFAnalyzer(), Backtester(), MarketIntelligence())
+    service = BrainService(BTCDataFetcher(), Database(), NewsCollector(), MacroMonitor(), PolymarketMonitor(), AIBrain(), DecisionManager(), MarketCycleAnalyzer(), SignalEngine(), MTFAnalyzer(), Backtester(), MarketIntelligence())
     service.refresh()
     def monitor():
         while True:
