@@ -3,8 +3,11 @@ import feedparser
 import time
 from datetime import datetime, timedelta
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict
 import logging
+
+from utils.http import get_text
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +72,17 @@ class NewsCollector:
     def fetch_all_news(self) -> List[NewsItem]:
         # Preserve the last successful result during a feed cooldown or outage.
         # A temporary broken publisher must not make the intelligence panel empty.
+        # All feeds are fetched concurrently with a timeout so one dead publisher
+        # can never stall the news refresh.
+        jobs = [(url, category) for category, feeds in self.RSS_FEEDS.items() for url in feeds]
         all_news = []
-        for category, feeds in self.RSS_FEEDS.items():
-            for url in feeds:
-                all_news.extend(self._fetch_rss(url, category))
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = [pool.submit(self._fetch_rss, url, category) for url, category in jobs]
+            for f in futures:
+                try:
+                    all_news.extend(f.result())
+                except Exception as exc:
+                    logger.warning("news feed worker failed: %s", exc)
         if all_news:
             all_news.sort(key=lambda x: x.timestamp, reverse=True)
             deduped = {item.url or item.title: item for item in all_news}
@@ -85,7 +95,10 @@ class NewsCollector:
                 return []
         items = []
         try:
-            feed = feedparser.parse(url)
+            # feedparser.parse(url) has no timeout of its own and can hang on a
+            # dead publisher; fetch with an explicit timeout, then parse the body.
+            body = get_text(url, timeout=8, retries=0, headers={"User-Agent": "Mozilla/5.0 (compatible; BTCBrain/1.0)"})
+            feed = feedparser.parse(body)
             self.last_fetch[url] = time.time()
             for entry in feed.entries[:8]:
                 title   = getattr(entry, "title",   "")

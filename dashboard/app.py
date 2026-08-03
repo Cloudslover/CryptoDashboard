@@ -617,31 +617,12 @@ def create_app(service: BrainService) -> Dash:
         },
     )
 
-    @app.callback(
-        Output("status", "children"),
-        Output("overview", "children"),
-        Output("macro", "children"),
-        Output("decision", "children"),
-        Output("derivatives", "children"),
-        Output("onchain", "children"),
-        Output("health", "children"),
-        Output("research", "children"),
-        Output("chart", "figure"),
-        Output("signals", "children"),
-        Output("news", "children"),
-        Output("queue", "children"),
-        Output("polymarket", "children"),
-        Output("cvd", "children"),
-        Output("tradequality", "children"),
-        Output("stability", "children"),
-        Output("portfolio", "children"),
-        Output("brainmemory", "children"),
-        Output("llm", "children"),
-        Input("poll", "n_intervals"),
-        Input("timeframe", "value"),
-        Input("refresh", "n_clicks"),
-    )
-    def render(_, tf, __):
+    def _render(_, tf, __):
+        """Build all panel children from the latest cached snapshot.
+
+        Wrapped by the `render` callback below, which adds a DEGRADED fallback
+        so one malformed data point can never 500 the whole terminal.
+        """
         # Never block the browser on the data pipeline: kick a background
         # refresh (the monitor loop also refreshes on REFRESH_SECONDS and the
         # refresh_lock collapses overlaps) and render the latest cached
@@ -1070,6 +1051,58 @@ def create_app(service: BrainService) -> Dash:
         ])
 
         return status_txt, overview, macro_ui, decision, derivatives_ui, onchain_ui, health_ui, research_ui, fig, sigui, news_ui, queue_ui, polymarket_ui, cvd_ui, tq_ui, stability_ui, portfolio_ui, brainmemory_ui, llm_ui
+
+    @app.callback(
+        Output("status", "children"),
+        Output("overview", "children"),
+        Output("macro", "children"),
+        Output("decision", "children"),
+        Output("derivatives", "children"),
+        Output("onchain", "children"),
+        Output("health", "children"),
+        Output("research", "children"),
+        Output("chart", "figure"),
+        Output("signals", "children"),
+        Output("news", "children"),
+        Output("queue", "children"),
+        Output("polymarket", "children"),
+        Output("cvd", "children"),
+        Output("tradequality", "children"),
+        Output("stability", "children"),
+        Output("portfolio", "children"),
+        Output("brainmemory", "children"),
+        Output("llm", "children"),
+        Input("poll", "n_intervals"),
+        Input("timeframe", "value"),
+        Input("refresh", "n_clicks"),
+    )
+    def render(_, tf, __):
+        # One malformed data point must never take the whole terminal down:
+        # render the panels with a DEGRADED status instead of 500ing the page.
+        try:
+            return _render(_, tf, __)
+        except Exception as exc:
+            logger.exception("render failed")
+            err = str(exc)
+            msg = html.Div(
+                f"⚠ PANEL UNAVAILABLE: {err}",
+                style={"color": C["red"], "fontSize": "11px", "whiteSpace": "pre-wrap"},
+            )
+            fig = go.Figure()
+            fig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor=C["card"], plot_bgcolor=C["card"],
+                height=520, margin={"l": 20, "r": 10, "t": 10, "b": 20},
+                font={"family": "JetBrains Mono", "color": C["text"], "size": 10},
+            )
+            return (
+                f"DEGRADED: {err}",   # status
+                msg, msg, msg, msg,   # overview, macro, decision, derivatives
+                msg, msg, msg, fig,   # onchain, health, research, chart
+                msg, msg, msg, msg,   # signals, news, queue, polymarket
+                msg, msg, msg, msg,   # cvd, tradequality, stability, portfolio
+                msg, msg,             # brainmemory, llm
+            )
 
     @app.callback(Output("action", "children"), Input("approve", "n_clicks"), Input("reject", "n_clicks"), prevent_initial_call=True)
     def action_cb(yes, no):

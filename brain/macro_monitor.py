@@ -1,6 +1,7 @@
 """Macro monitor with independent fallbacks. One unavailable source never stops a refresh."""
 from __future__ import annotations
 import os, time, logging
+from concurrent.futures import ThreadPoolExecutor
 from utils.http import get_json
 logger = logging.getLogger(__name__)
 
@@ -11,18 +12,27 @@ class MacroMonitor:
     def _cached(self, key, ttl): return key in self.cache_time and time.time() - self.cache_time[key] < ttl
     def _store(self, key, value): self.cache[key], self.cache_time[key] = value, time.time(); return value
 
+    @staticmethod
+    def _fetch_one(name, symbol):
+        """Single-ticker fetch. retries=0: Yahoo rate-limits with 429s and a
+        retry storm just multiplies the delay; one attempt fails fast."""
+        try:
+            raw = get_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+                           params={"range":"5d", "interval":"1d"}, timeout=8, retries=0)
+            closes = [x for x in raw["chart"]["result"][0]["indicators"]["quote"][0]["close"] if x is not None]
+            if len(closes) < 2: raise ValueError("insufficient closes")
+            return name, {"price": round(closes[-1], 2), "change": round((closes[-1] / closes[-2] - 1) * 100, 2), "available": True}
+        except Exception as exc:
+            logger.warning("macro source unavailable for %s: %s", name, exc)
+            return name, {"price": 0, "change": 0, "available": False}
+
     def get_markets(self):
         if self._cached("markets", 300): return self.cache["markets"]
-        data = {}
-        for name, symbol in self.INSTRUMENTS.items():
-            try:
-                raw = get_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}", params={"range":"5d", "interval":"1d"}, timeout=8)
-                closes = [x for x in raw["chart"]["result"][0]["indicators"]["quote"][0]["close"] if x is not None]
-                if len(closes) < 2: raise ValueError("insufficient closes")
-                data[name] = {"price": round(closes[-1], 2), "change": round((closes[-1] / closes[-2] - 1) * 100, 2), "available": True}
-            except Exception as exc:
-                logger.warning("macro source unavailable for %s: %s", name, exc)
-                data[name] = {"price": 0, "change": 0, "available": False}
+        # Fetch all tickers concurrently so a slow/blocked provider costs one
+        # timeout (~8s) instead of 12 sequential timeouts (minutes).
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda kv: self._fetch_one(*kv), self.INSTRUMENTS.items()))
+        data = dict(results)
         return self._store("markets", data)
 
     def get_fed_data(self):
@@ -33,7 +43,7 @@ class MacroMonitor:
         try:
             endpoint = "https://api.stlouisfed.org/fred/series/observations"
             def series(series_id, limit):
-                payload = get_json(endpoint, params={"series_id":series_id,"api_key":key,"file_type":"json","sort_order":"desc","limit":limit}, timeout=10)
+                payload = get_json(endpoint, params={"series_id":series_id,"api_key":key,"file_type":"json","sort_order":"desc","limit":limit}, timeout=10, retries=1)
                 return [float(x["value"]) for x in payload.get("observations", []) if x["value"] not in (".", "")]
             yields, funds = series("DGS10", 5), series("FEDFUNDS", 2)
             y10, change, rate = yields[0], yields[0] - yields[1] if len(yields)>1 else 0, funds[0]

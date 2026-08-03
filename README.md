@@ -122,6 +122,16 @@ The new command-center panels are intentionally arranged as a research funnel:
 
 Correlation is conditional: e.g. BTC may trade like a risk asset one period and a safe-haven narrative another. Keyword news sentiment is explainable but cannot validate a story, detect misinformation, or predict policy outcomes. The tool is designed to make uncertainty visible, not to make autonomous trading decisions.
 
+## Troubleshooting
+
+**The dashboard takes many minutes (up to ~30) before the server appears.** The server is supposed to open in ~1–2 s; the first data snapshot streams in the background. If the terminal blocks for minutes instead, you are running an old copy of `main.py` that called `service.refresh()` synchronously before starting the web server. Update your local code — the startup is not gated on the data pipeline anymore.
+
+**Data panels stay on BOOTING/DEGRADED when a provider is unreachable.** Third-party sources (mempool.space, blockchain.info, Yahoo Finance, Polymarket, RSS feeds) can be blocked, rate-limited, or slow on some networks. All endpoints now run concurrently with short timeouts and a per-host circuit breaker, so a snapshot completes in seconds and dead hosts are retried at most every 5 minutes. Binance itself is the only source the pipeline requires for a LIVE snapshot; if Binance is also unreachable, the last successful snapshot is retained.
+
+**Repeated `Callback function not found for output '..status.children...'` errors (500) every ~60 s.** The browser tab is stale — it was opened against an older version of the dashboard (fewer panels), and it keeps polling an old callback signature. Close old tabs and hard-refresh the page (`Ctrl+Shift+R`), or restart the browser. A fresh page load always gets the current callback set.
+
+**`L/S cols:` / `get_agg_trades unavailable` warnings.** These were bugs in parsing Binance's current response columns (`buySellRatio/buyVol/sellVol`, lowercase `p/q` agg-trade keys); they are fixed and the Long/Short and CVD panels now populate.
+
 ## Development
 
 ```bash

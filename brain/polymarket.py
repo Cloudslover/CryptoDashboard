@@ -24,6 +24,7 @@ from __future__ import annotations
 import json, time, logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Optional
 
 import pandas as pd
@@ -146,20 +147,33 @@ class PolymarketMonitor:
     def fetch(self) -> List[PolymarketMarket]:
         markets: List[PolymarketMarket] = []
         seen = set()
-        for category, queries in SEARCH_QUERIES.items():
-            for q in queries:
+
+        def _search(q: str, category: str) -> List[PolymarketMarket]:
+            try:
+                data = get_json(
+                    f"{GAMMA_BASE}/public-search",
+                    params={"q": q, "limit": 20},
+                    timeout=8, retries=1, headers={"User-Agent": USER_AGENT})
+                found = []
+                for m in self._extract_markets(data):
+                    mk = self._parse_market(m, category)
+                    if mk and mk.slug not in seen:
+                        seen.add(mk.slug)
+                        found.append(mk)
+                return found
+            except Exception as exc:
+                logger.warning("polymarket search '%s' unavailable: %s", q, exc)
+                return []
+
+        jobs = [(q, category) for category, queries in SEARCH_QUERIES.items() for q in queries]
+        # Concurrent so a slow/blocked gamma API costs one timeout, not N.
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(_search, q, category) for q, category in jobs]
+            for f in futures:
                 try:
-                    data = get_json(
-                        f"{GAMMA_BASE}/public-search",
-                        params={"q": q, "limit": 20},
-                        timeout=10, headers={"User-Agent": USER_AGENT})
-                    for m in self._extract_markets(data):
-                        mk = self._parse_market(m, category)
-                        if mk and mk.slug not in seen:
-                            seen.add(mk.slug)
-                            markets.append(mk)
+                    markets.extend(f.result())
                 except Exception as exc:
-                    logger.warning("polymarket search '%s' unavailable: %s", q, exc)
+                    logger.warning("polymarket search worker failed: %s", exc)
         # Optional curated slugs (exact match), added only if not already present.
         slugs = [s.strip() for s in (POLYMARKET_SLUGS or "").split(",") if s.strip()]
         for slug in slugs:
@@ -168,7 +182,7 @@ class PolymarketMonitor:
             try:
                 data = get_json(f"{GAMMA_BASE}/markets",
                                 params={"slug": slug},
-                                timeout=10, headers={"User-Agent": USER_AGENT})
+                                timeout=8, retries=1, headers={"User-Agent": USER_AGENT})
                 for m in self._extract_markets(data):
                     mk = self._parse_market(m, "CURATED")
                     if mk and mk.slug not in seen:
