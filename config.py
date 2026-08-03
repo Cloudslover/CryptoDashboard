@@ -38,6 +38,20 @@ MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "2"))
 DAILY_LOSS_LIMIT_PCT = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "3.0"))
 MAX_LEVERAGE = int(os.getenv("MAX_LEVERAGE", "10"))
 
+# ── LLM Assistant (AI Brain market-intelligence brief) ─────────────────
+# auto | groq | gemini | off — auto tries Groq first, then Gemini.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "auto")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# openai/gpt-oss-120b is Groq's recommended replacement for
+# llama-3.3-70b-versatile, which sunsets 2026-08-16.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+# Gemini free tier (since Apr 2026) covers Flash / Flash-Lite models only.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+LLM_REFRESH_SECONDS = int(os.getenv("LLM_REFRESH_SECONDS", "180"))
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "900"))
+LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "20"))
+
 TIMEFRAMES = {
     "1m": 500, "5m": 500, "15m": 500, "1h": 500,
     "4h": 500, "1d": 730, "1w": 520,
