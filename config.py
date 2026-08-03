@@ -25,6 +25,19 @@ CVD_TRADES_LIMIT = int(os.getenv("CVD_TRADES_LIMIT", "1000"))
 MAX_RISK_PERCENT = float(os.getenv("MAX_RISK_PERCENT", "1.0"))
 MIN_RISK_REWARD = float(os.getenv("MIN_RISK_REWARD", "1.5"))
 
+# ── Brain Memory & Signal Stability (anti-whipsaw) ────────────────────
+SIGNAL_COOLDOWN_MINUTES = int(os.getenv("SIGNAL_COOLDOWN_MINUTES", "30"))
+FLIP_PRICE_THRESHOLD_PCT = float(os.getenv("FLIP_PRICE_THRESHOLD_PCT", "0.8"))
+MIN_CONF_TO_FLIP = float(os.getenv("MIN_CONF_TO_FLIP", "75"))
+SAME_THESIS_PCT = float(os.getenv("SAME_THESIS_PCT", "0.3"))
+MAX_FLIPS_PER_HOUR = int(os.getenv("MAX_FLIPS_PER_HOUR", "2"))
+
+# ── Portfolio Guardian (fund protection) ───────────────────────────────
+MAX_TOTAL_RISK_PERCENT = float(os.getenv("MAX_TOTAL_RISK_PERCENT", "3.0"))
+MAX_OPEN_TRADES = int(os.getenv("MAX_OPEN_TRADES", "2"))
+DAILY_LOSS_LIMIT_PCT = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "3.0"))
+MAX_LEVERAGE = int(os.getenv("MAX_LEVERAGE", "10"))
+
 TIMEFRAMES = {
     "1m": 500, "5m": 500, "15m": 500, "1h": 500,
     "4h": 500, "1d": 730, "1w": 520,

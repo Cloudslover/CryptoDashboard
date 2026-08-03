@@ -88,12 +88,100 @@ class Database:
                 profit_factor REAL, total_return REAL,
                 max_drawdown REAL, sharpe_ratio REAL, params TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+
+            -- Brain Memory: every signal with full context for hysteresis & learning
+            CREATE TABLE IF NOT EXISTS signal_memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                action TEXT,
+                confidence REAL,
+                entry_price REAL,
+                stop_loss REAL,
+                take_profit_1 REAL,
+                take_profit_2 REAL,
+                take_profit_3 REAL,
+                position_size REAL,
+                leverage INTEGER,
+                margin_usd REAL,
+                risk_reward REAL,
+                risk_percent REAL,
+                risk_amount_pct REAL,
+                time_horizon TEXT,
+                reasoning TEXT,
+                invalidation TEXT,
+                trade_quality TEXT,
+                decision_hash TEXT,
+                status TEXT DEFAULT "PROPOSED",
+                approved_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+
+            CREATE INDEX IF NOT EXISTS idx_signal_memory_hash ON signal_memory(decision_hash);
+            CREATE INDEX IF NOT EXISTS idx_signal_memory_ts ON signal_memory(timestamp);
+
+            -- Portfolio Trades: approved trades with full portfolio protection details
+            CREATE TABLE IF NOT EXISTS portfolio_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signal_memory_id INTEGER,
+                timestamp TEXT,
+                action TEXT,
+                confidence REAL,
+                entry_price REAL,
+                stop_loss REAL,
+                take_profit_1 REAL,
+                take_profit_2 REAL,
+                take_profit_3 REAL,
+                position_size REAL,
+                leverage INTEGER,
+                margin_usd REAL,
+                risk_reward REAL,
+                risk_percent REAL,
+                approved_at TEXT,
+                exit_price REAL DEFAULT 0,
+                pnl_pct REAL DEFAULT 0,
+                pnl_lev REAL DEFAULT 0,
+                status TEXT DEFAULT "PENDING",
+                notes TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(signal_memory_id) REFERENCES signal_memory(id));
+
+            CREATE INDEX IF NOT EXISTS idx_portfolio_status ON portfolio_trades(status);
+            CREATE INDEX IF NOT EXISTS idx_portfolio_action ON portfolio_trades(action);
+
+            -- Brain learning log: which reasoning led to wins/losses
+            CREATE TABLE IF NOT EXISTS brain_learning_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                action TEXT,
+                pattern_hash TEXT,
+                reasoning_summary TEXT,
+                outcome TEXT,
+                pnl_pct REAL,
+                lesson TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP);
             """)
-            # Migration for DBs created before the trade_quality column existed.
+            # Migrations
             try:
                 c.execute("ALTER TABLE ai_decisions ADD COLUMN trade_quality TEXT")
             except Exception:
-                pass  # column already exists
+                pass
+            for col, typ in [
+                ("margin_usd REAL", "signal_memory"),
+                ("risk_percent REAL", "signal_memory"),
+                ("risk_amount_pct REAL", "signal_memory"),
+                ("time_horizon TEXT", "signal_memory"),
+                ("approved_at TEXT", "signal_memory"),
+                ("decision_hash TEXT", "signal_memory"),
+                ("margin_usd REAL", "portfolio_trades"),
+                ("risk_percent REAL", "portfolio_trades"),
+                ("pnl_lev REAL", "portfolio_trades"),
+                ("signal_memory_id INTEGER", "portfolio_trades"),
+            ]:
+                tbl = typ
+                col_name = col.split()[0]
+                try:
+                    c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col}")
+                except Exception:
+                    pass
 
     def save_candles(self, timeframe, candles: pd.DataFrame) -> int:
         """Persist exchange OHLCV idempotently, so restarts retain historical data."""
@@ -313,3 +401,113 @@ class Database:
         except Exception as e:
             logger.exception("get_backtest_history failed: %s", e)
             return pd.DataFrame()
+
+    # ── Brain Memory ───────────────────────────────────────────────────
+    def save_signal_memory(self, d: dict) -> int:
+        try:
+            with self._conn() as c:
+                cur = c.execute("""
+                    INSERT INTO signal_memory
+                    (timestamp,action,confidence,entry_price,stop_loss,
+                     take_profit_1,take_profit_2,take_profit_3,
+                     position_size,leverage,margin_usd,risk_reward,
+                     risk_percent,risk_amount_pct,time_horizon,
+                     reasoning,invalidation,trade_quality,decision_hash,status,approved_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (d.get("timestamp"), d.get("action"), d.get("confidence"),
+                     d.get("entry_price"), d.get("stop_loss"),
+                     d.get("take_profit_1"), d.get("take_profit_2"), d.get("take_profit_3"),
+                     d.get("position_size"), d.get("leverage"), d.get("margin_usd"),
+                     d.get("risk_reward"), d.get("risk_percent"), d.get("risk_amount_pct"),
+                     d.get("time_horizon"), d.get("reasoning"), d.get("invalidation"),
+                     d.get("trade_quality"), d.get("decision_hash"), d.get("status", "PROPOSED"),
+                     d.get("approved_at")))
+                return cur.lastrowid
+        except Exception as e:
+            logger.exception("save_signal_memory failed: %s", e)
+            return 0
+
+    def get_signal_memory(self, limit=100):
+        try:
+            with self._conn() as c:
+                return pd.read_sql_query("SELECT * FROM signal_memory ORDER BY timestamp DESC LIMIT ?", c, params=(limit,))
+        except Exception as e:
+            logger.exception("get_signal_memory failed: %s", e)
+            return pd.DataFrame()
+
+    def update_signal_memory_status(self, entry_price, action, status, approved_at=None):
+        try:
+            with self._conn() as c:
+                c.execute("""
+                    UPDATE signal_memory SET status=?, approved_at=?
+                    WHERE action=? AND ABS(entry_price - ?) / MAX(?,1) < 0.005
+                    ORDER BY timestamp DESC LIMIT 1
+                """, (status, approved_at or datetime.now().isoformat(), action, entry_price, entry_price))
+                # Fallback if ORDER BY LIMIT not supported in UPDATE (sqlite older)
+        except Exception:
+            try:
+                with self._conn() as c:
+                    c.execute("""
+                        UPDATE signal_memory SET status=?, approved_at=?
+                        WHERE id = (SELECT id FROM signal_memory WHERE action=? ORDER BY timestamp DESC LIMIT 1)
+                    """, (status, approved_at or datetime.now().isoformat(), action))
+            except Exception as e:
+                logger.warning(f"update_signal_memory_status failed: {e}")
+
+    # ── Portfolio Trades ───────────────────────────────────────────────
+    def save_portfolio_trade(self, d: dict, status="PENDING"):
+        try:
+            with self._conn() as c:
+                cur = c.execute("""
+                    INSERT INTO portfolio_trades
+                    (signal_memory_id,timestamp,action,confidence,entry_price,stop_loss,
+                     take_profit_1,take_profit_2,take_profit_3,position_size,leverage,margin_usd,
+                     risk_reward,risk_percent,approved_at,exit_price,pnl_pct,pnl_lev,status,notes)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (d.get("signal_memory_id"), d.get("timestamp") or datetime.now().isoformat(),
+                     d.get("action"), d.get("confidence"), d.get("entry_price"), d.get("stop_loss"),
+                     d.get("take_profit_1"), d.get("take_profit_2"), d.get("take_profit_3"),
+                     d.get("position_size"), d.get("leverage"), d.get("margin_usd", 0),
+                     d.get("risk_reward"), d.get("risk_percent", d.get("position_size", 0)),
+                     d.get("approved_at") or datetime.now().isoformat(),
+                     d.get("exit_price", 0), d.get("pnl_pct", 0), d.get("pnl_lev", 0),
+                     status or d.get("status", "PENDING"), d.get("notes", "")))
+                return cur.lastrowid
+        except Exception as e:
+            logger.exception("save_portfolio_trade failed: %s", e)
+            return 0
+
+    def update_portfolio_trade(self, trade_id, status, exit_price=0, pnl_pct=0, notes=""):
+        try:
+            with self._conn() as c:
+                c.execute("UPDATE portfolio_trades SET status=?, exit_price=?, pnl_pct=?, notes=? WHERE id=?",
+                          (status, exit_price, pnl_pct, notes, trade_id))
+        except Exception as e:
+            logger.exception("update_portfolio_trade failed: %s", e)
+
+    def get_portfolio_trades(self, limit=100):
+        try:
+            with self._conn() as c:
+                return pd.read_sql_query("SELECT * FROM portfolio_trades ORDER BY created_at DESC LIMIT ?", c, params=(limit,))
+        except Exception as e:
+            logger.exception("get_portfolio_trades failed: %s", e)
+            return pd.DataFrame()
+
+    def get_open_portfolio_trades(self):
+        try:
+            with self._conn() as c:
+                return pd.read_sql_query("SELECT * FROM portfolio_trades WHERE status IN ('OPEN','APPROVED','PENDING') ORDER BY created_at DESC", c)
+        except Exception as e:
+            logger.exception("get_open_portfolio_trades failed: %s", e)
+            return pd.DataFrame()
+
+    def save_brain_learning(self, d: dict):
+        try:
+            with self._conn() as c:
+                c.execute("""
+                    INSERT INTO brain_learning_log (timestamp,action,pattern_hash,reasoning_summary,outcome,pnl_pct,lesson)
+                    VALUES(?,?,?,?,?,?,?)""",
+                    (d.get("timestamp") or datetime.now().isoformat(), d.get("action"), d.get("pattern_hash"),
+                     d.get("reasoning_summary"), d.get("outcome"), d.get("pnl_pct", 0), d.get("lesson")))
+        except Exception as e:
+            logger.warning(f"save_brain_learning failed: {e}")
