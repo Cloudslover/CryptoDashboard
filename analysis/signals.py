@@ -8,7 +8,7 @@ class Signal:
     status: str
 
 class SignalEngine:
-    def generate_all_signals(self, df, funding, oi, fear_greed, ls_ratio, order_book, etf_flows):
+    def generate_all_signals(self, df, funding, oi, fear_greed, ls_ratio, order_book, etf_flows, cvd=None):
         if df is None or df.empty:
             return []
         last = df.iloc[-1]
@@ -21,7 +21,10 @@ class SignalEngine:
         ratio = float(ls_ratio.get("long_short_ratio", 1))
         imbalance = float(order_book.get("imbalance", 0))
         fg = int(fear_greed.get("value", 50))
-        return [
+        cvd = cvd or {}
+        cvd_status = cvd.get("status", "Unknown")
+        cvd_bull = cvd_status in ("Strong Buying", "Buying")
+        signals = [
             Signal(1, "Price structure", f"${last.close:,.0f} vs 200 EMA", status(price_bull)),
             Signal(2, "Momentum (RSI)", f"RSI {rsi:.1f}", "GREEN" if 40 <= rsi <= 68 else "YELLOW" if rsi < 75 else "RED"),
             Signal(3, "Funding", f"{rate:+.4f}%", "RED" if rate > .03 else "GREEN"),
@@ -32,4 +35,6 @@ class SignalEngine:
             Signal(8, "Supertrend", "Bullish" if bool(last.get("supertrend_bull", True)) else "Bearish", status(bool(last.get("supertrend_bull", True)))),
             Signal(9, "Volume", f"{float(last.get('volume_ratio', 1)):.2f}x average", "GREEN" if float(last.get("volume_ratio", 1)) >= .8 else "YELLOW"),
             Signal(10, "Spot-volume proxy", f"{float(etf_flows.get('volume_change_pct', 0)):+.1f}%", "GREEN" if float(etf_flows.get("volume_change_pct", 0)) >= -20 else "YELLOW"),
+            Signal(11, "CVD order flow", f"{cvd.get('net_delta',0):,.0f} Δ / {cvd.get('status','—')}", "GREEN" if cvd_bull else "RED" if cvd_status in ("Strong Selling", "Selling") else "YELLOW"),
         ]
+        return signals

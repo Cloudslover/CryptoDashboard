@@ -55,6 +55,7 @@ class Database:
                 take_profit_1 REAL, take_profit_2 REAL, take_profit_3 REAL,
                 position_size REAL, leverage INTEGER,
                 reasoning TEXT, invalidation TEXT,
+                trade_quality TEXT,
                 status TEXT DEFAULT "PENDING",
                 exit_price REAL DEFAULT 0, pnl_pct REAL DEFAULT 0,
                 notes TEXT,
@@ -88,6 +89,11 @@ class Database:
                 max_drawdown REAL, sharpe_ratio REAL, params TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP);
             """)
+            # Migration for DBs created before the trade_quality column existed.
+            try:
+                c.execute("ALTER TABLE ai_decisions ADD COLUMN trade_quality TEXT")
+            except Exception:
+                pass  # column already exists
 
     def save_candles(self, timeframe, candles: pd.DataFrame) -> int:
         """Persist exchange OHLCV idempotently, so restarts retain historical data."""
@@ -152,18 +158,21 @@ class Database:
     def save_decision(self, d) -> int:
         try:
             with self._conn() as c:
+                tq = d.get("trade_quality")
                 cur = c.execute("""INSERT INTO ai_decisions
                     (timestamp,action,confidence,entry_price,stop_loss,
                      take_profit_1,take_profit_2,take_profit_3,
-                     position_size,leverage,reasoning,invalidation,status)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                     position_size,leverage,reasoning,invalidation,trade_quality,status)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (d.get("timestamp"), d.get("action"),
                      d.get("confidence"), d.get("entry_price"),
                      d.get("stop_loss"),  d.get("take_profit_1"),
                      d.get("take_profit_2"), d.get("take_profit_3"),
                      d.get("position_size"), d.get("leverage"),
                      json.dumps(d.get("reasoning",[])),
-                     d.get("invalidation",""), d.get("status","PENDING")))
+                     d.get("invalidation",""),
+                     json.dumps(tq) if tq else None,
+                     d.get("status","PENDING")))
                 return cur.lastrowid
         except Exception as e:
             logger.exception("save_decision failed: %s", e)

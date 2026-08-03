@@ -12,6 +12,8 @@ A local, **decision-support** dashboard for Bitcoin futures research. It brings 
 - **Macro watch:** US equities (S&P 500, Nasdaq, Dow), London (FTSE 100), Europe (DAX), Japan (Nikkei), VIX, DXY, EUR/USD, USD/JPY, gold and oil. Each instrument is fetched independently, so a broken feed degrades only that instrument.
 - **News/event watch:** public crypto, Fed, macro, and geopolitical RSS sources. The last successful feed remains visible during outages. Social/influencer data is intentionally not scraped; use a licensed API and add it as a source if required.
 - **Prediction markets (Polymarket):** real-money implied-probability sentiment for crypto and macro events (Fed cuts, CPI, recession odds, Bitcoin price targets, ETF/reserve milestones) via the public Gamma API. The dashboard tracks how each market's "P(Yes)" moves over time (e.g. "shift since ~1 day ago"), flags the biggest probability shifts, and correlates them with BTC price direction. Like every other source it degrades gracefully during outages and retains the last snapshot.
+- **Order flow (CVD):** Cumulative Volume Delta computed from recent Binance futures aggregated trades, shown as a signal plus a dedicated panel (net delta, buy/sell split, buy pressure, and a price/delta *divergence* flag).
+- **Trade Quality scoring:** the dashboard scores how strong the *evidence* is for the current setup across 10 independent factors (Market Structure, Trend, Volume, Funding, Open Interest, Whale Activity, News Risk, Macro Alignment, Sentiment, Risk/Reward) and rolls them into an overall **Trade Quality score /100** with per-factor reasons. It tells you how strong the case is, not what to do.
 - **Risk-first plans:** explainable rule-based long/short/stand-aside recommendations with entry reference, invalidation, stop, targets, confidence, and explicit human approval queue.
 - **Storage:** SQLite WAL database persists fetched OHLCV candles, snapshots, news, macro data, and plans in `btc_brain.db` (ignored by Git).
 - **Backtesting:** a small no-look-ahead technical trend/pullback backtester including configurable fees and slippage. It evaluates a rule set, not future performance.
@@ -49,6 +51,39 @@ Configuration (`.env`):
 - `POLYMARKET_SLUGS` — optional comma-separated specific market slugs to always include, on top of automatic keyword discovery.
 
 > Note: Polymarket is a *context* layer. Combine it with technicals, macro, and on-chain metrics; never trade on a probability move alone.
+
+## Order-flow (CVD) layer
+
+CVD ("cumulative volume delta") is computed from Binance futures `aggTrades`: each trade is classified by whether the buyer was the taker, summed into buy vs sell volume, and expressed as a net signed delta. It is an order-flow *context* layer:
+
+- **Net delta / buy pressure** — who's been the aggressor recently.
+- **Price/delta divergence** — a flag when price moved one way but delta moved the other, a classic absorption/climax warning.
+- **CVD signal** — appears in the signals table (Signal #11) alongside funding, OI, and order-book imbalance.
+
+Configuration (`.env`): `CVD_TRADES_LIMIT` (default `1000`) controls how many recent trades are analysed per refresh.
+
+> CVD from a single short window is a snapshot, not a full session footprint. Treat it as one confirming/disconfirming input, never as a standalone entry trigger.
+
+## Trade Quality layer
+
+The AI no longer just says "buy/sell/stand aside" — it scores **how strong the evidence is**. For each setup it evaluates 10 factors (each 0-10, with a plain-language reason) and combines them by weight into an overall **Trade Quality score /100**:
+
+| Factor | Weight |
+| --- | ---: |
+| Market Structure | 14% |
+| Trend | 13% |
+| Risk/Reward | 11% |
+| Funding | 10% |
+| Macro Alignment | 10% |
+| Volume | 9% |
+| News Risk | 9% |
+| Open Interest | 8% |
+| Whale Activity | 8% |
+| Sentiment | 8% |
+
+The breakdown is shown in a dedicated panel, stored with each plan, and included in the approval queue. Weights live in `brain/trade_quality.py` if you want to tune them.
+
+> The score is a structured, auditable evidence summary — not a prediction and not a recommendation. Set your own position size and do your own risk management.
 
 ## Operating workflow
 

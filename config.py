@@ -20,6 +20,8 @@ POLYMARKET_SHIFT_HOURS = float(os.getenv("POLYMARKET_SHIFT_HOURS", "24.0"))
 # Optional comma-separated list of specific Polymarket slugs to always include,
 # in addition to keyword discovery. Leave empty to rely on keyword search.
 POLYMARKET_SLUGS = os.getenv("POLYMARKET_SLUGS", "")
+# Order-flow (CVD): number of recent aggregated trades to analyse per refresh.
+CVD_TRADES_LIMIT = int(os.getenv("CVD_TRADES_LIMIT", "1000"))
 MAX_RISK_PERCENT = float(os.getenv("MAX_RISK_PERCENT", "1.0"))
 MIN_RISK_REWARD = float(os.getenv("MIN_RISK_REWARD", "1.5"))
 

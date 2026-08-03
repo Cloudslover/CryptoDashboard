@@ -26,6 +26,7 @@ class AIDecision:
     risk_reward:    float
     invalidation:   str
     requires_approval: bool = True
+    trade_quality:  dict = None
 
 
 class AIBrain:
@@ -36,7 +37,8 @@ class AIBrain:
 
     def make_decision(self, market_data, signals, mtf_data,
                       news_summary, macro_data, cycle_data,
-                      price_history, polymarket_data=None) -> AIDecision:
+                      price_history, polymarket_data=None, cvd=None,
+                      trade_quality_scorer=None) -> AIDecision:
         reasoning = []
         score     = 0.0
 
@@ -98,6 +100,16 @@ class AIBrain:
             invalidation   = invalid,
             requires_approval = True,
         )
+        # Trade Quality: score how strong the evidence is, not just the direction.
+        if trade_quality_scorer is not None:
+            try:
+                dec.trade_quality = trade_quality_scorer.score(
+                    dec, price_history, signals, mtf_data, macro_data,
+                    news_summary, market_data.get("funding", {}) if isinstance(market_data, dict) else {},
+                    market_data.get("oi", {}) if isinstance(market_data, dict) else {},
+                    cvd or {}, polymarket_data)
+            except Exception as exc:
+                logger.warning("trade quality scoring failed: %s", exc)
         self.history.append(dec)
         return dec
 

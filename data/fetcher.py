@@ -10,11 +10,12 @@ from utils.http import get_json
 logger = logging.getLogger(__name__)
 
 try:
-    from config import FUTURES_SYMBOL, SYMBOL, COINGECKO_BASE
+    from config import FUTURES_SYMBOL, SYMBOL, COINGECKO_BASE, CVD_TRADES_LIMIT
 except ImportError:
     FUTURES_SYMBOL = "BTC/USDT:USDT"
     SYMBOL         = "BTC/USDT"
     COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+    CVD_TRADES_LIMIT = 1000
 
 
 class BTCDataFetcher:
@@ -286,6 +287,87 @@ class BTCDataFetcher:
             logger.exception("get_order_book_imbalance: %s", e)
             return {"bid_value":0,"ask_value":0,"imbalance":0,
                     "bid_ask_ratio":1.0,"status":"Unknown"}
+
+    def get_agg_trades(self, limit=None):
+        """Fetch recent aggregated futures trades used for order-flow (CVD) analysis.
+
+        Binance's `m` flag means 'is the buyer the market maker'. If the buyer is
+        the maker, the *seller* was the aggressor (sell taker). We use it to
+        classify each trade as buy/sell pressure.
+        """
+        try:
+            d = get_json(
+                "https://fapi.binance.com/fapi/v1/aggTrades"
+                f"?symbol=BTCUSDT&limit={limit}", timeout=10)
+            df = pd.DataFrame(d)
+            if df.empty:
+                return pd.DataFrame(columns=["time","price","qty","is_buyer_maker"])
+            df = df.astype({"price": float, "qty": float})
+            # is_buyer_maker is a bool string ("true"/"false") from Binance.
+            df["is_buyer_maker"] = df["m"].astype(str).str.lower() == "true"
+            df["is_buyer_maker"] = df["is_buyer_maker"].astype(bool)
+            df["time"] = pd.to_datetime(df["T"], unit="ms")
+            return df[["time", "price", "qty", "is_buyer_maker"]]
+        except Exception as e:
+            logger.warning("get_agg_trades unavailable: %s", e)
+            return pd.DataFrame(columns=["time","price","qty","is_buyer_maker"])
+
+    def get_cvd(self, limit=None):
+        """Compute order-flow metrics from recent trades: cumulative volume delta,
+        net delta, buy/sell pressure split, and a 'delta divergence' flag.
+
+        Returns a plain dict so an unreachable feed degrades to zeros/Unknown.
+        """
+        limit = limit or CVD_TRADES_LIMIT
+        default = {
+            "cvd": 0.0, "net_delta": 0.0, "buy_volume": 0.0,
+            "sell_volume": 0.0, "total_volume": 0.0, "buy_pressure": 50.0,
+            "divergence": False, "status": "Unknown", "n_trades": 0,
+        }
+        df = self.get_agg_trades(limit)
+        if df is None or df.empty:
+            return default
+        # Seller is taker when the buyer is the maker (m=true).
+        # Seller is the taker when the buyer is the maker (m=true).
+        sell = df[df["is_buyer_maker"]]["qty"].sum()
+        buy = df[~df["is_buyer_maker"]]["qty"].sum()
+        total = buy + sell
+        if total <= 0:
+            return default
+        delta = buy - sell  # signed net delta over the window
+        # CVD is the running cumulative delta; for a finite window it equals the
+        # signed net delta observed in this snapshot.
+        return {
+            "cvd": round(delta, 4),
+            "net_delta": round(delta, 4),
+            "buy_volume": round(buy, 4),
+            "sell_volume": round(sell, 4),
+            "total_volume": round(total, 4),
+            "buy_pressure": round(buy / total * 100, 2),
+            # Positive price move on negative delta (or vice versa) = divergence.
+            "divergence": self._cvd_divergence(df, delta),
+            "status": self._clf_cvd(delta / total * 100),
+            "n_trades": int(len(df)),
+        }
+
+    def _cvd_divergence(self, df, net_delta):
+        try:
+            if df is None or df.empty or len(df) < 10:
+                return False
+            first = float(df["price"].iloc[0])
+            last = float(df["price"].iloc[-1])
+            move = last - first
+            # divergence: price up but net selling, or price down but net buying
+            return bool((move > 0 and net_delta < 0) or (move < 0 and net_delta > 0))
+        except Exception:
+            return False
+
+    def _clf_cvd(self, delta_pct):
+        if delta_pct > 15:   return "Strong Buying"
+        if delta_pct > 5:    return "Buying"
+        if delta_pct < -15:  return "Strong Selling"
+        if delta_pct < -5:   return "Selling"
+        return "Balanced"
 
     def get_etf_flows(self):
         try:
