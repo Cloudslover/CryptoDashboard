@@ -19,8 +19,8 @@ class FakeResponse:
 
 def test_get_json_success(monkeypatch):
     # Replace session.get with a fake that returns known JSON
-    def fake_get(url, params=None, timeout=None):
-        return FakeResponse({"ok": True, "url": url})
+    def fake_get(url, params=None, timeout=None, headers=None):
+        return FakeResponse({"ok": True, "url": url, "headers": headers})
 
     monkeypatch.setattr(http_mod, "session", types.SimpleNamespace(get=fake_get))
     res = http_mod.get_json("https://example.com/api", params={"q":1})
@@ -29,8 +29,20 @@ def test_get_json_success(monkeypatch):
     assert "example.com" in res.get("url")
 
 
+def test_get_json_forwards_headers(monkeypatch):
+    captured = {}
+
+    def fake_get(url, params=None, timeout=None, headers=None):
+        captured.update(headers or {})
+        return FakeResponse({"ok": True})
+
+    monkeypatch.setattr(http_mod, "session", types.SimpleNamespace(get=fake_get))
+    http_mod.get_json("https://example.com/api", headers={"User-Agent": "test-agent"})
+    assert captured.get("User-Agent") == "test-agent"
+
+
 def test_get_json_http_error(monkeypatch):
-    def fake_get(url, params=None, timeout=None):
+    def fake_get(url, params=None, timeout=None, headers=None):
         return FakeResponse({"error": "not found"}, status=404)
 
     monkeypatch.setattr(http_mod, "session", types.SimpleNamespace(get=fake_get))

@@ -10,11 +10,12 @@ from utils.http import get_json
 logger = logging.getLogger(__name__)
 
 try:
-    from config import FUTURES_SYMBOL, SYMBOL, COINGECKO_BASE
+    from config import FUTURES_SYMBOL, SYMBOL, COINGECKO_BASE, CVD_TRADES_LIMIT
 except ImportError:
     FUTURES_SYMBOL = "BTC/USDT:USDT"
     SYMBOL         = "BTC/USDT"
     COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+    CVD_TRADES_LIMIT = 1000
 
 
 class BTCDataFetcher:
@@ -54,7 +55,8 @@ class BTCDataFetcher:
             df = df.astype(float)
             return self._store(key, df)
         except Exception as e:
-            logger.exception("get_ohlcv %s: %s", timeframe, e)
+            # Provider outages are expected; callers use the cached/local fallback.
+            logger.warning("get_ohlcv %s unavailable: %s", timeframe, e)
             return self.cache.get(key, pd.DataFrame())
 
     def get_current_price(self):
@@ -184,16 +186,23 @@ class BTCDataFetcher:
 
             df = pd.DataFrame(raw)
 
-            # Auto-detect column names
+            # Auto-detect column names. Binance's takerlongshortRatio endpoint
+            # currently returns: buySellRatio, sellVol, buyVol, timestamp
+            # (older/alt mirrors may use longShortRatio / longAccount / shortAccount).
             ratio_col = long_col = short_col = None
+            long_is_vol = short_is_vol = False
             for col in df.columns:
                 cl = col.lower().replace("_","").replace("-","")
-                if cl == "longshortratio":
+                if cl in ("longshortratio", "buysellratio"):
                     ratio_col = col
                 elif cl in ("longaccount","buyratio","longratio"):
                     long_col  = col
                 elif cl in ("shortaccount","sellratio","shortratio"):
                     short_col = col
+                elif cl == "buyvol":
+                    long_col, long_is_vol = col, True
+                elif cl == "sellvol":
+                    short_col, short_is_vol = col, True
 
             if ratio_col is None:
                 # Try computing from long/short
@@ -211,8 +220,15 @@ class BTCDataFetcher:
             avg   = float(df[ratio_col].mean())
 
             if long_col and short_col:
-                lp = float(df[long_col].astype(float).iloc[-1]) * 100
-                sp = float(df[short_col].astype(float).iloc[-1])* 100
+                lv = float(df[long_col].astype(float).iloc[-1])
+                sv = float(df[short_col].astype(float).iloc[-1])
+                if long_is_vol or short_is_vol:
+                    # Volume columns: share of volume, not an account ratio.
+                    lp = lv / (lv + sv) * 100 if (lv + sv) > 0 else 50.0
+                    sp = 100 - lp
+                else:
+                    lp = lv * 100
+                    sp = sv * 100
             else:
                 lp = ratio / (1 + ratio) * 100
                 sp = 100 - lp
@@ -285,6 +301,89 @@ class BTCDataFetcher:
             logger.exception("get_order_book_imbalance: %s", e)
             return {"bid_value":0,"ask_value":0,"imbalance":0,
                     "bid_ask_ratio":1.0,"status":"Unknown"}
+
+    def get_agg_trades(self, limit=None):
+        """Fetch recent aggregated futures trades used for order-flow (CVD) analysis.
+
+        Binance's `m` flag means 'is the buyer the market maker'. If the buyer is
+        the maker, the *seller* was the aggressor (sell taker). We use it to
+        classify each trade as buy/sell pressure.
+        """
+        try:
+            d = get_json(
+                "https://fapi.binance.com/fapi/v1/aggTrades"
+                f"?symbol=BTCUSDT&limit={limit}", timeout=10)
+            df = pd.DataFrame(d)
+            if df.empty:
+                return pd.DataFrame(columns=["time","price","qty","is_buyer_maker"])
+            # Binance aggTrades uses lowercase keys (p, q, T, m, a, f, l).
+            df = df.rename(columns={"p": "price", "q": "qty"})
+            df = df.astype({"price": float, "qty": float})
+            # is_buyer_maker is a bool string ("true"/"false") from Binance.
+            df["is_buyer_maker"] = df["m"].astype(str).str.lower() == "true"
+            df["is_buyer_maker"] = df["is_buyer_maker"].astype(bool)
+            df["time"] = pd.to_datetime(df["T"], unit="ms")
+            return df[["time", "price", "qty", "is_buyer_maker"]]
+        except Exception as e:
+            logger.warning("get_agg_trades unavailable: %s", e)
+            return pd.DataFrame(columns=["time","price","qty","is_buyer_maker"])
+
+    def get_cvd(self, limit=None):
+        """Compute order-flow metrics from recent trades: cumulative volume delta,
+        net delta, buy/sell pressure split, and a 'delta divergence' flag.
+
+        Returns a plain dict so an unreachable feed degrades to zeros/Unknown.
+        """
+        limit = limit or CVD_TRADES_LIMIT
+        default = {
+            "cvd": 0.0, "net_delta": 0.0, "buy_volume": 0.0,
+            "sell_volume": 0.0, "total_volume": 0.0, "buy_pressure": 50.0,
+            "divergence": False, "status": "Unknown", "n_trades": 0,
+        }
+        df = self.get_agg_trades(limit)
+        if df is None or df.empty:
+            return default
+        # Seller is taker when the buyer is the maker (m=true).
+        # Seller is the taker when the buyer is the maker (m=true).
+        sell = df[df["is_buyer_maker"]]["qty"].sum()
+        buy = df[~df["is_buyer_maker"]]["qty"].sum()
+        total = buy + sell
+        if total <= 0:
+            return default
+        delta = buy - sell  # signed net delta over the window
+        # CVD is the running cumulative delta; for a finite window it equals the
+        # signed net delta observed in this snapshot.
+        return {
+            "cvd": round(delta, 4),
+            "net_delta": round(delta, 4),
+            "buy_volume": round(buy, 4),
+            "sell_volume": round(sell, 4),
+            "total_volume": round(total, 4),
+            "buy_pressure": round(buy / total * 100, 2),
+            # Positive price move on negative delta (or vice versa) = divergence.
+            "divergence": self._cvd_divergence(df, delta),
+            "status": self._clf_cvd(delta / total * 100),
+            "n_trades": int(len(df)),
+        }
+
+    def _cvd_divergence(self, df, net_delta):
+        try:
+            if df is None or df.empty or len(df) < 10:
+                return False
+            first = float(df["price"].iloc[0])
+            last = float(df["price"].iloc[-1])
+            move = last - first
+            # divergence: price up but net selling, or price down but net buying
+            return bool((move > 0 and net_delta < 0) or (move < 0 and net_delta > 0))
+        except Exception:
+            return False
+
+    def _clf_cvd(self, delta_pct):
+        if delta_pct > 15:   return "Strong Buying"
+        if delta_pct > 5:    return "Buying"
+        if delta_pct < -15:  return "Strong Selling"
+        if delta_pct < -5:   return "Selling"
+        return "Balanced"
 
     def get_etf_flows(self):
         try:

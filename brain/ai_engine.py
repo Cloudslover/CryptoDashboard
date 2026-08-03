@@ -26,6 +26,7 @@ class AIDecision:
     risk_reward:    float
     invalidation:   str
     requires_approval: bool = True
+    trade_quality:  dict = None
 
 
 class AIBrain:
@@ -36,34 +37,40 @@ class AIBrain:
 
     def make_decision(self, market_data, signals, mtf_data,
                       news_summary, macro_data, cycle_data,
-                      price_history) -> AIDecision:
+                      price_history, polymarket_data=None, cvd=None,
+                      trade_quality_scorer=None) -> AIDecision:
         reasoning = []
         score     = 0.0
 
-        # 1. MACRO (20%)
+        # 1. MACRO (18%)
         ms, mr = self._macro(macro_data)
-        score += ms * 0.20
+        score += ms * 0.18
         reasoning.extend(mr)
 
-        # 2. NEWS (15%)
+        # 2. NEWS (12%)
         ns, nr = self._news(news_summary)
-        score += ns * 0.15
+        score += ns * 0.12
         reasoning.extend(nr)
 
-        # 3. CYCLE (20%)
+        # 3. CYCLE (18%)
         cs, cr = self._cycle(cycle_data)
-        score += cs * 0.20
+        score += cs * 0.18
         reasoning.extend(cr)
 
-        # 4. TECHNICALS (25%)
+        # 4. TECHNICALS (23%)
         ts, tr = self._technicals(signals, mtf_data)
-        score += ts * 0.25
+        score += ts * 0.23
         reasoning.extend(tr)
 
-        # 5. PRICE ACTION (20%)
+        # 5. PRICE ACTION (19%)
         ps, pr = self._price_action(price_history)
-        score += ps * 0.20
+        score += ps * 0.19
         reasoning.extend(pr)
+
+        # 6. PREDICTION MARKETS (10%) — real-money implied-probability sentiment
+        pms, pmr = self._polymarket(polymarket_data)
+        score += pms * 0.10
+        reasoning.extend(pmr)
 
         # RISK FILTERS
         score, rr = self._risk_filters(score, market_data, signals, macro_data)
@@ -93,6 +100,16 @@ class AIBrain:
             invalidation   = invalid,
             requires_approval = True,
         )
+        # Trade Quality: score how strong the evidence is, not just the direction.
+        if trade_quality_scorer is not None:
+            try:
+                dec.trade_quality = trade_quality_scorer.score(
+                    dec, price_history, signals, mtf_data, macro_data,
+                    news_summary, market_data.get("funding", {}) if isinstance(market_data, dict) else {},
+                    market_data.get("oi", {}) if isinstance(market_data, dict) else {},
+                    cvd or {}, polymarket_data)
+            except Exception as exc:
+                logger.warning("trade quality scoring failed: %s", exc)
         self.history.append(dec)
         return dec
 
@@ -137,6 +154,35 @@ class AIBrain:
         if not r:
             lbl = "Bullish" if overall>0.1 else "Bearish" if overall<-0.1 else "Neutral"
             r.append(f"News sentiment: {lbl} ({overall:+.2f})")
+        return s, r
+
+    def _polymarket(self, data):
+        """Score prediction-market sentiment as a supplementary context layer.
+
+        Polymarket prices are real-money implied probabilities. A rise in the
+        probability of risk-supportive outcomes (Fed cuts, Bitcoin price
+        targets, ETF/reserve milestones) is treated as mildly constructive,
+        and a fall as mildly cautious. This is context, not a standalone signal.
+        """
+        s = 0.0; r = []
+        if not data or not data.get("markets"):
+            return 0, ["Prediction mkts: N/A"]
+        macro  = float(data.get("macro_prob_shift", 0))
+        crypto = float(data.get("crypto_prob_shift", 0))
+        policy = float(data.get("policy_prob_shift", 0))
+        risk   = float(data.get("risk_prob_shift", 0))
+        bias   = data.get("overall_bias", "NEUTRAL")
+        # Rough alignment: crypto/policy bullish == +, macro/risk cautious flips.
+        aligned = crypto * 1.0 + policy * 0.8 - macro * 0.4 - risk * 0.6
+        s += float(np.clip(aligned, -25, 25))
+        if "BULLISH" in bias:
+            r.append(f"PREDICTION MKTS: {bias} bias (crypto {crypto:+.1f}pt, policy {policy:+.1f}pt)")
+        elif "BEARISH" in bias:
+            r.append(f"PREDICTION MKTS: {bias} bias (crypto {crypto:+.1f}pt, policy {policy:+.1f}pt)")
+        else:
+            r.append(f"PREDICTION MKTS: Neutral (crypto {crypto:+.1f}pt)")
+        for m in (data.get("biggest_shifts") or [])[:2]:
+            r.append(f"  {m['question'][:38]} → {m['change_1d']:+.1f}pt")
         return s, r
 
     def _cycle(self, cycle):
