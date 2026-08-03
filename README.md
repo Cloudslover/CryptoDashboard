@@ -7,6 +7,7 @@ A local, **decision-support** dashboard for Bitcoin futures research. It brings 
 ## What is included
 
 - **Market data:** Binance public BTC futures OHLCV, ticker, funding, open interest, order-book imbalance, fear & greed.
+- **BTC Futures Command Center:** a focused OSINT workflow distilled from the broad OSINT4all directory: breaking-news feeds, macro/Fed/BLS/CME calendar links, institutional/ETF research links, sentiment links, derivatives positioning, on-chain network activity, a clearly labelled large-mempool transaction watch, and Binance Futures public API health.
 - **Technical context:** EMA 21/50/200, RSI, MACD, ATR, Bollinger Bands, Supertrend, support/resistance, signal table, and 1m–1w multi-timeframe consensus.
 - **Macro watch:** US equities (S&P 500, Nasdaq, Dow), London (FTSE 100), Europe (DAX), Japan (Nikkei), VIX, DXY, EUR/USD, USD/JPY, gold and oil. Each instrument is fetched independently, so a broken feed degrades only that instrument.
 - **News/event watch:** public crypto, Fed, macro, and geopolitical RSS sources. The last successful feed remains visible during outages. Social/influencer data is intentionally not scraped; use a licensed API and add it as a source if required.
@@ -33,11 +34,18 @@ Open `http://127.0.0.1:8050`.
 
 ## Operating workflow
 
-1. Start with the 1D/4H trend and macro/event context—not a 1m signal.
-2. Review the proposed plan’s **invalidation**, stop distance, target, funding, and news risk.
-3. Set your own position size from a fixed account-risk budget (the default suggested cap is 1%); do not treat the displayed leverage as a recommendation.
-4. Approve only after independently checking price and upcoming economic events. Approval is a local paper-plan record.
-5. Run a backtest only over sufficiently long, representative data. Include fees/slippage and reject strategies that fail out-of-sample testing.
+The new command-center panels are intentionally arranged as a research funnel:
+
+1. **Breaking news:** read the timestamped RSS items and open the original source before treating a headline as fact.
+2. **Macro calendar:** check the linked official Fed and BLS release calendars and CME FedWatch for scheduled volatility; links are not a promise that an event will move BTC.
+3. **Derivatives:** compare funding, open interest, long/short positioning, and order-book imbalance. A crowded direction can amplify a move, but none of these fields predicts it alone.
+4. **On-chain and whale watch:** use the block height, mempool load, and large pending transaction watch as network context. A mempool transaction has no known sender/receiver attribution and is **not** an exchange inflow/outflow signal; verify it in an explorer.
+5. **Institutional and sentiment:** use SEC EDGAR, ETF-flow research, Fear & Greed, Google Trends, and Reddit as leads. Social sentiment is noisy and is not fact checking.
+7. Start with the 1D/4H trend and macro/event context—not a 1m signal.
+8. Review the proposed plan’s **invalidation**, stop distance, target, funding, and news risk.
+9. Set your own position size from a fixed account-risk budget (the default suggested cap is 1%); do not treat the displayed leverage as a recommendation.
+10. Approve only after independently checking price and upcoming economic events. Approval is a local paper-plan record.
+11. Run a backtest only over sufficiently long, representative data. Include fees/slippage and reject strategies that fail out-of-sample testing.
 
 ## Data quality and limitations
 
