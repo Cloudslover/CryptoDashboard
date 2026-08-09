@@ -4,6 +4,16 @@ A local, **decision-support** dashboard for Bitcoin futures research. It brings 
 
 > **Important:** This application does not hold exchange credentials, does not include an order-execution client, and cannot place a live order. “Approve” records a **paper trade plan** only. BTC futures are high-risk; no model, indicator, sentiment score, or backtest is a guarantee of a trade outcome.
 
+## Ownership / links
+
+| | |
+|---|---|
+| **Owner** | [Cloudslover](https://github.com/Cloudslover) |
+| **Repo** | https://github.com/Cloudslover/CryptoDashboard |
+| **Companion signal engine** | https://github.com/Cloudslover/AI (CryptoBrain) |
+
+This dashboard is the *situational awareness screen* (macro, news, funding, order-flow, LLM brief). The companion **AI** repo is the *signal-generation brain*.
+
 ## What is included
 
 - **Market data:** Binance public BTC futures OHLCV, ticker, funding, open interest, order-book imbalance, fear & greed.
